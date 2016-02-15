@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(amcl)
 
+find_library(YAML yaml-cpp REQUIRED)
+
 find_package(catkin REQUIRED
         COMPONENTS
             roscpp
@@ -58,6 +60,7 @@ target_link_libraries(amcl
     amcl_sensors amcl_map amcl_pf
     ${Boost_LIBRARIES}
     ${catkin_LIBRARIES}
+    yaml-cpp
 )
 
 install( TARGETS
