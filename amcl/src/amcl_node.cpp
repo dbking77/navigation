@@ -66,6 +66,8 @@
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
 #include <boost/foreach.hpp>
+#include <boost/filesystem.hpp>
+#include <map_server/image_loader.h>
 #define foreach BOOST_FOREACH
 
 #define NEW_UNIFORM_SAMPLING 1
@@ -114,12 +116,15 @@ class AmclNode
   public:
     AmclNode();
 
-    // Runs
-  AmclNode(const std::string config_yaml_fn,
+  // Runs
+  AmclNode(const std::string &config_yaml_fn,
+           const std::string &map_yaml_fn,
            bool publish_to_ros);
 
-  void run(const std::string in_bag_fn,
-           const std::string out_bag_fn);
+  void loadMapYaml(const std::string &map_yaml_fn);
+
+  void run(const std::string &in_bag_fn,
+           const std::string &out_bag_fn);
 
 
     ~AmclNode();
@@ -280,7 +285,7 @@ void sigintHandler(int sig)
 
 void usage()
 {
-  std::cerr << "Usage : amcl | amcl <config.yaml> <in.bag> <out.bag>" << std::endl;
+  std::cerr << "Usage : amcl | amcl <config.yaml> <map.yaml> <in.bag> <out.bag>" << std::endl;
 }
 
 int
@@ -297,10 +302,10 @@ main(int argc, char** argv)
   {
     amcl_node_ptr.reset(new AmclNode());
   }
-  else if (argc == 4)
+  else if (argc == 5)
   {
-    amcl_node_ptr.reset(new AmclNode(argv[1], true));
-    amcl_node_ptr->run(argv[2], argv[3]);
+    amcl_node_ptr.reset(new AmclNode(argv[1], argv[2], true));
+    amcl_node_ptr->run(argv[3], argv[4]);
   }
   else
   {
@@ -457,42 +462,81 @@ AmclNode::AmclNode() :
 }
 
 
-
-void AmclNode::run(const std::string in_bag_fn,
-                   const std::string out_bag_fn)
+void AmclNode::loadMapYaml(const std::string &map_yaml_fn)
 {
-    rosbag::Bag bag;
-    bag.open("test.bag", rosbag::bagmode::Read);
+  YAML::Node map = YAML::LoadFile(map_yaml_fn);
+  std::string image_fn = map["image"].as<std::string>();
+  double resolution = map["resolution"].as<double>();
+  double origin[3];
+  for (int ii=0; ii<3; ++ii)
+  {
+    origin[ii] = map["origin"][ii].as<double>();
+  }
+  bool negate = bool(map["negate"].as<int>());
+  double occupied_thresh = map["occupied_thresh"].as<double>();
+  double free_thresh = map["free_thresh"].as<double>();
+  bool trinary = true;
+  if (map["trinary"])
+  {
+    bool trinary = map["trinary"].as<bool>();
+  }
 
-    std::vector<std::string> topics;
-    topics.push_back(std::string("tf"));
-    topics.push_back(std::string("base_scan"));
+  // Provide fully qualified path for image 
+  if(image_fn.size() == 0)
+  {
+    throw std::runtime_error("The image tag cannot be an empty string.");
+  }
+  if(image_fn[0] != '/')
+  {
+    image_fn = boost::filesystem::path(map_yaml_fn).parent_path().string() + "/" + image_fn;
+    std::cerr << "Absolute image fn : " << image_fn << std::endl;
+  }
 
-    rosbag::View view(bag, rosbag::TopicQuery(topics));
-    foreach(rosbag::MessageInstance const msg, view)
-    {
-      tf2_msgs::TFMessage::ConstPtr tf = msg.instantiate<tf2_msgs::TFMessage>();
-      if (tf != NULL)
-      {
-        std::cerr << "tf" << std::endl;
-        continue;
-      }
+  nav_msgs::GetMap::Response resp;
+  map_server::loadMapFromFile(&resp, image_fn.c_str(), resolution, negate, 
+                              occupied_thresh, free_thresh, origin, trinary);
 
-      sensor_msgs::LaserScan::ConstPtr base_scan = msg.instantiate<sensor_msgs::LaserScan>();
-      if (base_scan != NULL)
-      {
-        std::cerr << "base_scan" << std::endl;
-        continue;
-      }
-
-      std::cerr << "unsupported message type" << msg.getTopic() << std::endl;
-    }
-
-    bag.close();
+  
 }
 
+
+void AmclNode::run(const std::string &in_bag_fn,
+                   const std::string &out_bag_fn)
+{
+  rosbag::Bag bag;
+  bag.open("test.bag", rosbag::bagmode::Read);
+
+  std::vector<std::string> topics;
+  topics.push_back(std::string("tf"));
+  topics.push_back(std::string("base_scan"));
+
+  rosbag::View view(bag, rosbag::TopicQuery(topics));
+  foreach(rosbag::MessageInstance const msg, view)
+  {
+    tf2_msgs::TFMessage::ConstPtr tf = msg.instantiate<tf2_msgs::TFMessage>();
+    if (tf != NULL)
+    {
+      std::cerr << "tf" << std::endl;
+      continue;
+    }
+
+    sensor_msgs::LaserScan::ConstPtr base_scan = msg.instantiate<sensor_msgs::LaserScan>();
+    if (base_scan != NULL)
+    {
+      std::cerr << "base_scan" << std::endl;
+      continue;
+    }
+
+    std::cerr << "unsupported message type" << msg.getTopic() << std::endl;
+  }
+
+  bag.close();
+}
+
+
 // Runs
-AmclNode::AmclNode(const std::string config_yaml_fn,
+AmclNode::AmclNode(const std::string &config_yaml_fn,
+                   const std::string &map_yaml_fn,
                    bool publish_to_ros) :
         sent_first_transform_(false),
         latest_tf_valid_(false),
@@ -599,9 +643,12 @@ AmclNode::AmclNode(const std::string config_yaml_fn,
 
   transform_tolerance_.fromSec(tmp_tol);
 
-  updatePoseFromServer();
+  // TODO get initial pose
+  //updatePoseFromServer();
 
   cloud_pub_interval.fromSec(1.0);
+
+  loadMapYaml(map_yaml_fn);
 
   if (publish_to_ros)
   {
@@ -626,14 +673,7 @@ AmclNode::AmclNode(const std::string config_yaml_fn,
     //                                                 this, _1));
     //initial_pose_sub_ = nh_.subscribe("initialpose", 2, &AmclNode::initialPoseReceived, this);
   }
-
-  if(use_map_topic_)
-  {
-    // Use map topic from bag file
-    ROS_INFO("Using map topic from bag file");
-  } else {
-    requestMap();
-  }
+  
   m_force_update = false;
 }
 
