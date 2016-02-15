@@ -63,7 +63,10 @@
 
 // Stand-alone configuration
 #include <yaml-cpp/yaml.h>
-
+#include <rosbag/bag.h>
+#include <rosbag/view.h>
+#include <boost/foreach.hpp>
+#define foreach BOOST_FOREACH
 
 #define NEW_UNIFORM_SAMPLING 1
 
@@ -264,7 +267,7 @@ class AmclNode
 
 std::vector<std::pair<int,int> > AmclNode::free_space_indices;
 
-#define USAGE "USAGE: amcl"
+//#define USAGE "USAGE: amcl"
 
 boost::shared_ptr<AmclNode> amcl_node_ptr;
 
@@ -273,6 +276,11 @@ void sigintHandler(int sig)
   // Save latest pose as we're shutting down.
   amcl_node_ptr->savePoseToServer();
   ros::shutdown();
+}
+
+void usage()
+{
+  std::cerr << "Usage : amcl | amcl <config.yaml> <in.bag> <out.bag>" << std::endl;
 }
 
 int
@@ -285,7 +293,7 @@ main(int argc, char** argv)
   signal(SIGINT, sigintHandler);
 
   // Make our node available to sigintHandler
-  if (argc == 2)
+  if (argc == 1)
   {
     amcl_node_ptr.reset(new AmclNode());
   }
@@ -296,6 +304,7 @@ main(int argc, char** argv)
   }
   else
   {
+    usage();
     ROS_ERROR("Incorrect number of arguments");
     exit(1);
   }
@@ -452,7 +461,34 @@ AmclNode::AmclNode() :
 void AmclNode::run(const std::string in_bag_fn,
                    const std::string out_bag_fn)
 {
-  // TODO
+    rosbag::Bag bag;
+    bag.open("test.bag", rosbag::bagmode::Read);
+
+    std::vector<std::string> topics;
+    topics.push_back(std::string("tf"));
+    topics.push_back(std::string("base_scan"));
+
+    rosbag::View view(bag, rosbag::TopicQuery(topics));
+    foreach(rosbag::MessageInstance const msg, view)
+    {
+      tf2_msgs::TFMessage::ConstPtr tf = msg.instantiate<tf2_msgs::TFMessage>();
+      if (tf != NULL)
+      {
+        std::cerr << "tf" << std::endl;
+        continue;
+      }
+
+      sensor_msgs::LaserScan::ConstPtr base_scan = msg.instantiate<sensor_msgs::LaserScan>();
+      if (base_scan != NULL)
+      {
+        std::cerr << "base_scan" << std::endl;
+        continue;
+      }
+
+      std::cerr << "unsupported message type" << msg.getTopic() << std::endl;
+    }
+
+    bag.close();
 }
 
 // Runs
@@ -470,7 +506,9 @@ AmclNode::AmclNode(const std::string config_yaml_fn,
         first_map_received_(false),
         first_reconfigure_call_(true)
 {
+  std::cerr << "Loading config file : " << config_yaml_fn << std::endl;
   YAML::Node config = YAML::LoadFile(config_yaml_fn);
+  std::cerr << "Done loading config file" << std::endl;
 
   double tmp = config["gui_publish_rate"].as<double>(); //-1.0
   gui_publish_period = ros::Duration(1.0/tmp);
@@ -482,16 +520,23 @@ AmclNode::AmclNode(const std::string config_yaml_fn,
   max_particles_ = config["max_particles"].as<unsigned>(); //, 5000);
   pf_err_ = config["kld_err"].as<double>(); // , 0.01);
   pf_z_ = config["kld_z"].as<double>(); //, 0.99);
+
+  std::cerr << "Config 0" << std::endl;
+
   alpha1_ = config["odom_alpha1"].as<double>(); // 0.2);
   alpha2_ = config["odom_alpha2"].as<double>(); // 0.2);
   alpha3_ = config["odom_alpha3"].as<double>(); //  0.2);
   alpha4_ = config["odom_alpha4"].as<double>(); // 0.2);
   alpha5_ = config["odom_alpha5"].as<double>();  // 0.2);
 
+  std::cerr << "Config 1" << std::endl;
+
   do_beamskip_ = config["do_beamskip"].as<bool>(); //false);
   beam_skip_distance_ = config["beam_skip_distance"].as<double>();  //0.5);
   beam_skip_threshold_ = config["beam_skip_threshold"].as<double>();  //0.3);
-  beam_skip_error_threshold_ = config["beam_skip_error_threshold_"].as<double>();  //0.9);
+  beam_skip_error_threshold_ = config["beam_skip_error_threshold"].as<double>();  //0.9);
+
+  std::cerr << "Config 2" << std::endl;
 
   z_hit_ = config["laser_z_hit"].as<double>(); // 0.95);
   z_short_ = config["laser_z_short"].as<double>(); //0.1);
@@ -500,6 +545,8 @@ AmclNode::AmclNode(const std::string config_yaml_fn,
   sigma_hit_ = config["laser_sigma_hit"].as<double>();  //0.2);
   lambda_short_ = config["laser_lambda_short"].as<double>();  //0.1);
   laser_likelihood_max_dist_ = config["laser_likelihood_max_dist"].as<double>();  //2.0);
+
+  std::cerr << "Config 3" << std::endl;
 
   std::string tmp_model_type;
   tmp_model_type = config["laser_model_type"].as<std::string>(); // "likelihood_field"));
@@ -533,17 +580,22 @@ AmclNode::AmclNode(const std::string config_yaml_fn,
     odom_model_type_ = ODOM_MODEL_DIFF;
   }
 
+  std::cerr << "Config 4" << std::endl;
+
   d_thresh_ = config["update_min_d"].as<double>();  // 0.2);
   a_thresh_ = config["update_min_a"].as<double>();  // M_PI/6.0);
   odom_frame_id_ = config["odom_frame_id"].as<std::string>();  // std::string("odom"));
   base_frame_id_ = config["base_frame_id"].as<std::string>();  // std::string("base_link"));
   global_frame_id_ = config["global_frame_id"].as<std::string>();  // std::string("map"));
   resample_interval_ = config["resample_interval"].as<unsigned>();  // 2);
+
+  std::cerr << "Config 5" << std::endl;
+
   double tmp_tol;
   tmp_tol = config["transform_tolerance"].as<double>();  // 0.1);
   alpha_slow_ = config["recovery_alpha_slow"].as<double>();  // 0.001);
   alpha_fast_ = config["recovery_alpha_fast"].as<double>();  // 0.1);
-  tf_broadcast_ = config["tf_broadcast"].as<double>();  // true);
+  tf_broadcast_ = config["tf_broadcast"].as<bool>();  // true);
 
   transform_tolerance_.fromSec(tmp_tol);
 
