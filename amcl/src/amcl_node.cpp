@@ -50,6 +50,12 @@
 #include "nav_msgs/SetMap.h"
 #include "std_srvs/Empty.h"
 
+// For TF2 transform support
+#include "tf2_ros/buffer.h"
+#include "tf2_ros/transform_broadcaster.h"
+#include "tf2_ros/transform_listener.h"
+#include "tf2_ros/message_filter.h"
+
 // For transform support
 #include "tf/transform_broadcaster.h"
 #include "tf/transform_listener.h"
@@ -125,6 +131,7 @@ class AmclNode
 
   void run(const std::string &in_bag_fn,
            const std::string &out_bag_fn);
+  void bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan);
 
 
     ~AmclNode();
@@ -481,7 +488,7 @@ void AmclNode::loadMapYaml(const std::string &map_yaml_fn)
     bool trinary = map["trinary"].as<bool>();
   }
 
-  // Provide fully qualified path for image 
+  // Provide fully qualified path for image
   if(image_fn.size() == 0)
   {
     throw std::runtime_error("The image tag cannot be an empty string.");
@@ -493,16 +500,23 @@ void AmclNode::loadMapYaml(const std::string &map_yaml_fn)
   }
 
   nav_msgs::GetMap::Response resp;
-  map_server::loadMapFromFile(&resp, image_fn.c_str(), resolution, negate, 
+  map_server::loadMapFromFile(&resp, image_fn.c_str(), resolution, negate,
                               occupied_thresh, free_thresh, origin, trinary);
 
   handleMapMessage( resp.map );
 }
 
 
+void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
+{
+  std::cerr << "bagLaserReceived : " << laser_scan->header.seq << std::endl;
+}
+
 void AmclNode::run(const std::string &in_bag_fn,
                    const std::string &out_bag_fn)
 {
+  std::cerr << "run" << std::endl;
+
   rosbag::Bag bag;
   bag.open(in_bag_fn, rosbag::bagmode::Read);
 
@@ -510,20 +524,41 @@ void AmclNode::run(const std::string &in_bag_fn,
   topics.push_back(std::string("tf"));
   topics.push_back(std::string("base_scan"));
 
+
+  //message_filters::SimpleFilter<sensor_msgs::LaserScan> laser_scan;
+  //ros::CallbackQueue cb_queue;
+
+  std::cerr << "message_filter" << std::endl;
+  tf2_ros::Buffer tf_buffer;
+  tf2_ros::MessageFilter<sensor_msgs::LaserScan>
+    laser_scan_filter(tf_buffer,
+                      odom_frame_id_,
+                      100,
+                      NULL);
+
+
+  std::cerr << "register_callback" << std::endl;
+  laser_scan_filter.registerCallback(boost::bind(&AmclNode::bagLaserReceived, this, _1));
+
   rosbag::View view(bag, rosbag::TopicQuery(topics));
   foreach(rosbag::MessageInstance const msg, view)
   {
-    tf2_msgs::TFMessage::ConstPtr tf = msg.instantiate<tf2_msgs::TFMessage>();
-    if (tf != NULL)
+    tf2_msgs::TFMessage::ConstPtr tf_msg = msg.instantiate<tf2_msgs::TFMessage>();
+    if (tf_msg != NULL)
     {
-      std::cerr << "tf" << std::endl;
+      //std::cerr << "tf" << std::endl;
+      for (size_t ii=0; ii<tf_msg->transforms.size(); ++ii)
+      {
+        tf_buffer.setTransform(tf_msg->transforms[ii], "rosbag_authority");
+      }
       continue;
     }
 
     sensor_msgs::LaserScan::ConstPtr base_scan = msg.instantiate<sensor_msgs::LaserScan>();
     if (base_scan != NULL)
     {
-      std::cerr << "base_scan" << std::endl;
+      laser_scan_filter.add(base_scan);
+      //std::cerr << "base_scan" << std::endl;
       continue;
     }
 
@@ -640,28 +675,11 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
 
   if (publish_to_ros)
   {
-    //tf_ = new tf::TransformListener(); pulled from bag
-
     tfb_ = new tf::TransformBroadcaster();
     pose_pub_ = nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>("amcl_pose", 2, true);
     particlecloud_pub_ = nh_.advertise<geometry_msgs::PoseArray>("particlecloud", 2, true);
-    //global_loc_srv_ = nh_.advertiseService("global_localization",
-    //                                       &AmclNode::globalLocalizationCallback,
-    //                                       this);
-    //nomotion_update_srv_= nh_.advertiseService("request_nomotion_update", &AmclNode::nomotionUpdateCallback, this);
-    //set_map_srv_= nh_.advertiseService("set_map", &AmclNode::setMapCallback, this);
-
-    //laser_scan_sub_ = new message_filters::Subscriber<sensor_msgs::LaserScan>(nh_, scan_topic_, 100);
-    //laser_scan_filter_ =
-    //  new tf::MessageFilter<sensor_msgs::LaserScan>(*laser_scan_sub_,
-    //                                                *tf_,
-    //                                                odom_frame_id_,
-    //                                                100);
-    //laser_scan_filter_->registerCallback(boost::bind(&AmclNode::laserReceived,
-    //                                                 this, _1));
-    //initial_pose_sub_ = nh_.subscribe("initialpose", 2, &AmclNode::initialPoseReceived, this);
   }
-  
+
   m_force_update = false;
 }
 
