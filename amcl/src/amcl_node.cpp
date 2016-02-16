@@ -496,7 +496,7 @@ void AmclNode::loadMapYaml(const std::string &map_yaml_fn)
   map_server::loadMapFromFile(&resp, image_fn.c_str(), resolution, negate, 
                               occupied_thresh, free_thresh, origin, trinary);
 
-  
+  handleMapMessage( resp.map );
 }
 
 
@@ -504,7 +504,7 @@ void AmclNode::run(const std::string &in_bag_fn,
                    const std::string &out_bag_fn)
 {
   rosbag::Bag bag;
-  bag.open("test.bag", rosbag::bagmode::Read);
+  bag.open(in_bag_fn, rosbag::bagmode::Read);
 
   std::vector<std::string> topics;
   topics.push_back(std::string("tf"));
@@ -565,22 +565,16 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
   pf_err_ = config["kld_err"].as<double>(); // , 0.01);
   pf_z_ = config["kld_z"].as<double>(); //, 0.99);
 
-  std::cerr << "Config 0" << std::endl;
-
   alpha1_ = config["odom_alpha1"].as<double>(); // 0.2);
   alpha2_ = config["odom_alpha2"].as<double>(); // 0.2);
   alpha3_ = config["odom_alpha3"].as<double>(); //  0.2);
   alpha4_ = config["odom_alpha4"].as<double>(); // 0.2);
   alpha5_ = config["odom_alpha5"].as<double>();  // 0.2);
 
-  std::cerr << "Config 1" << std::endl;
-
   do_beamskip_ = config["do_beamskip"].as<bool>(); //false);
   beam_skip_distance_ = config["beam_skip_distance"].as<double>();  //0.5);
   beam_skip_threshold_ = config["beam_skip_threshold"].as<double>();  //0.3);
   beam_skip_error_threshold_ = config["beam_skip_error_threshold"].as<double>();  //0.9);
-
-  std::cerr << "Config 2" << std::endl;
 
   z_hit_ = config["laser_z_hit"].as<double>(); // 0.95);
   z_short_ = config["laser_z_short"].as<double>(); //0.1);
@@ -589,8 +583,6 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
   sigma_hit_ = config["laser_sigma_hit"].as<double>();  //0.2);
   lambda_short_ = config["laser_lambda_short"].as<double>();  //0.1);
   laser_likelihood_max_dist_ = config["laser_likelihood_max_dist"].as<double>();  //2.0);
-
-  std::cerr << "Config 3" << std::endl;
 
   std::string tmp_model_type;
   tmp_model_type = config["laser_model_type"].as<std::string>(); // "likelihood_field"));
@@ -624,16 +616,12 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
     odom_model_type_ = ODOM_MODEL_DIFF;
   }
 
-  std::cerr << "Config 4" << std::endl;
-
   d_thresh_ = config["update_min_d"].as<double>();  // 0.2);
   a_thresh_ = config["update_min_a"].as<double>();  // M_PI/6.0);
   odom_frame_id_ = config["odom_frame_id"].as<std::string>();  // std::string("odom"));
   base_frame_id_ = config["base_frame_id"].as<std::string>();  // std::string("base_link"));
   global_frame_id_ = config["global_frame_id"].as<std::string>();  // std::string("map"));
   resample_interval_ = config["resample_interval"].as<unsigned>();  // 2);
-
-  std::cerr << "Config 5" << std::endl;
 
   double tmp_tol;
   tmp_tol = config["transform_tolerance"].as<double>();  // 0.1);
