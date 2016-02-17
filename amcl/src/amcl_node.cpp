@@ -27,6 +27,7 @@
 
 #include <boost/bind.hpp>
 #include <boost/thread/mutex.hpp>
+#include <boost/shared_ptr.hpp>
 
 // Signal handling
 #include <signal.h>
@@ -74,7 +75,6 @@
 #include <boost/foreach.hpp>
 #include <boost/filesystem.hpp>
 #include <map_server/image_loader.h>
-#define foreach BOOST_FOREACH
 
 #define NEW_UNIFORM_SAMPLING 1
 
@@ -140,6 +140,18 @@ class AmclNode
     void savePoseToServer();
 
   private:
+    // Keep all information associated with a single laser in one struct
+    struct LaserInfo : boost::noncopyable
+    {
+      LaserInfo() : laser(NULL), update(true) { }
+      AMCLLaser* laser;
+      double angle_min;
+      double angle_increment;
+      bool update;
+    };
+
+    typedef boost::shared_ptr<LaserInfo> LaserInfoPtr;
+
     tf::TransformBroadcaster* tfb_;
     tf::TransformListener* tf_;
 
@@ -171,7 +183,7 @@ class AmclNode
 
     void updateParticleFilter(const pf_vector_t &pose,
                               const sensor_msgs::LaserScanConstPtr& laser_scan,
-                              int laser_index);
+                              LaserInfoPtr laser_info);
 
     void handleMapMessage(const nav_msgs::OccupancyGrid& msg);
     void freeMapDependentMemory();
@@ -208,9 +220,13 @@ class AmclNode
     message_filters::Subscriber<sensor_msgs::LaserScan>* laser_scan_sub_;
     tf::MessageFilter<sensor_msgs::LaserScan>* laser_scan_filter_;
     ros::Subscriber initial_pose_sub_;
-    std::vector< AMCLLaser* > lasers_;
-    std::vector< bool > lasers_update_;
-    std::map< std::string, int > frame_to_laser_;
+
+    /// Mapping from laser frame ID to laser data
+    typedef std::map< std::string, LaserInfoPtr > frame_to_laser_t;
+    frame_to_laser_t frame_to_laser_;
+
+    //std::vector< AMCLLaser* > lasers_;
+    //std::vector< bool > lasers_update_;
 
     // Particle filter
     pf_t *pf_;
@@ -540,7 +556,7 @@ void AmclNode::run(const std::string &in_bag_fn,
   laser_scan_filter.registerCallback(boost::bind(&AmclNode::bagLaserReceived, this, _1));
 
   rosbag::View view(bag, rosbag::TopicQuery(topics));
-  foreach(rosbag::MessageInstance const msg, view)
+  BOOST_FOREACH(rosbag::MessageInstance const msg, view)
   {
     tf2_msgs::TFMessage::ConstPtr tf_msg = msg.instantiate<tf2_msgs::TFMessage>();
     if (tf_msg != NULL)
@@ -945,8 +961,9 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   freeMapDependentMemory();
   // Clear queued laser objects because they hold pointers to the existing
   // map, #5202.
-  lasers_.clear();
-  lasers_update_.clear();
+  //lasers_.clear();
+  //lasers_update_.clear();
+  // TODO this cause
   frame_to_laser_.clear();
 
   map_ = convertMap(msg);
@@ -1229,8 +1246,8 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
   if(frame_to_laser_.find(laser_scan->header.frame_id) == frame_to_laser_.end())
   {
     ROS_DEBUG("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan->header.frame_id.c_str());
-    lasers_.push_back(new AMCLLaser(*laser_));
-    lasers_update_.push_back(true);
+    //lasers_.push_back(new AMCLLaser(*laser_));
+    //lasers_update_.push_back(true);
     laser_index = frame_to_laser_.size();
 
     geometry_msgs::TransformStamped laser_transform;
@@ -1249,21 +1266,32 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
       return;
     }
 
+    {
+      geometry_msgs::Quaternion q2 = laser_transform.transform.rotation;
+      ROS_ERROR("Received laser's rotation wrt robot2: %.3f %.3f %.3f %.3f",
+                q2.x, q2.y, q2.z, q2.w);
+      tf::Quaternion q(q2.x, q2.y, q2.z, q2.w);
+      tf::Vector3 v = q.getAxis();
+      double angle = q.getAngle();
+      ROS_ERROR("Received laser's rotation wrt robot: %.3f %.3f %.3f %.3f",
+                v.x(), v.y(), v.z(), angle);
+    }
+
     pf_vector_t laser_pose_v;
     laser_pose_v.v[0] = laser_transform.transform.translation.x; //0.235;
     laser_pose_v.v[1] = laser_transform.transform.translation.y; //0.0;
     // laser mounting angle gets computed later -> set to 0 here!
     laser_pose_v.v[2] = 0;
-    lasers_[laser_index]->SetLaserPose(laser_pose_v);
+    //lasers_[laser_index]->SetLaserPose(laser_pose_v);
     ROS_ERROR("Received laser's pose wrt robot: %.3f %.3f %.3f",
               laser_pose_v.v[0],
               laser_pose_v.v[1],
               laser_pose_v.v[2]);
 
-    frame_to_laser_[laser_scan->header.frame_id] = laser_index;
+    //frame_to_laser_[laser_scan->header.frame_id] = laser_index;
   } else {
     // we have the laser pose, retrieve laser index
-    laser_index = frame_to_laser_[laser_scan->header.frame_id];
+    //laser_index = frame_to_laser_[laser_scan->header.frame_id];
   }
 
   // Where was the robot when this scan was taken?
@@ -1275,7 +1303,7 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
     return;
   }
 
-  updateParticleFilter(pose, laser_scan, laser_index);
+  //updateParticleFilter(pose, laser_scan, laser_index);
 }
 
 
@@ -1293,9 +1321,18 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   if(frame_to_laser_.find(laser_scan->header.frame_id) == frame_to_laser_.end())
   {
     ROS_DEBUG("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan->header.frame_id.c_str());
-    lasers_.push_back(new AMCLLaser(*laser_));
-    lasers_update_.push_back(true);
-    laser_index = frame_to_laser_.size();
+
+    // To account for lasers that are mounted upside-down, we determine the
+    // min, max, and increment angles of the laser in the base frame.
+    //
+    // Construct min and max angles of laser, in the base_link frame.
+    tf::Quaternion q;
+    q.setRPY(0.0, 0.0, laser_scan->angle_min);
+    tf::Stamped<tf::Quaternion> min_q(q, laser_scan->header.stamp,
+                                      laser_scan->header.frame_id);
+    q.setRPY(0.0, 0.0, laser_scan->angle_min + laser_scan->angle_increment);
+    tf::Stamped<tf::Quaternion> inc_q(q, laser_scan->header.stamp,
+                                      laser_scan->header.frame_id);
 
     tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
                                              tf::Vector3(0,0,0)),
@@ -1303,7 +1340,9 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     tf::Stamped<tf::Pose> laser_pose;
     try
     {
-      this->tf_->transformPose(base_frame_id_, ident, laser_pose);
+      tf_->transformPose(base_frame_id_, ident, laser_pose);
+      tf_->transformQuaternion(base_frame_id_, min_q, min_q);
+      tf_->transformQuaternion(base_frame_id_, inc_q, inc_q);
     }
     catch(tf::TransformException& e)
     {
@@ -1314,23 +1353,33 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       return;
     }
 
+    double angle_min = tf::getYaw(min_q);
+    double angle_increment = tf::getYaw(inc_q) - angle_min;
+
+    // wrapping angle to [-pi .. pi]
+    // TODO use angles
+    angle_increment = fmod(angle_increment + 5*M_PI, 2*M_PI) - M_PI;
+
+    ROS_DEBUG("Laser %d angles in base frame: min: %.3f inc: %.3f", laser_index, angle_min, angle_increment);
+
+    LaserInfoPtr laser_info(new LaserInfo);
+    laser_info->angle_min = angle_min;
+    laser_info->angle_increment = angle_increment;
+    laser_info->laser = new AMCLLaser(*laser_);
+
     pf_vector_t laser_pose_v;
     laser_pose_v.v[0] = laser_pose.getOrigin().x();
     laser_pose_v.v[1] = laser_pose.getOrigin().y();
-    // laser mounting angle gets computed later -> set to 0 here!
+    // laser mounting angle comes from angle_min and angle_max
     laser_pose_v.v[2] = 0;
-    lasers_[laser_index]->SetLaserPose(laser_pose_v);
-    ROS_ERROR("Received laser's pose wrt robot: %.3f %.3f %.3f",
+    laser_info->laser->SetLaserPose(laser_pose_v);
+    ROS_ERROR("Received laser's pose wrt robot: %.3f %.3f %.3f %.3f",
               laser_pose_v.v[0],
               laser_pose_v.v[1],
-              laser_pose_v.v[2]);
+              angle_min,
+              angle_increment);
 
-    frame_to_laser_[laser_scan->header.frame_id] = laser_index;
-    ROS_ERROR("lasers.size %ld, lasers_update.size %ld, laser_index %d",
-              lasers_.size(), lasers_update_.size(), laser_index);
-  } else {
-    // we have the laser pose, retrieve laser index
-    laser_index = frame_to_laser_[laser_scan->header.frame_id];
+    frame_to_laser_[laser_scan->header.frame_id] = laser_info;
   }
 
   // Where was the robot when this scan was taken?
@@ -1342,18 +1391,18 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     return;
   }
 
-  updateParticleFilter(pose, laser_scan, laser_index);
+  updateParticleFilter(pose, laser_scan, frame_to_laser_[laser_scan->header.frame_id]);
 }
 
 
 /**
  * @brief pose new pose of robot base
  * @brief laser_scan new laser scan data
- * @brief laser_index index of laser into array of lasers
+ * @brief laser_info info about laser which has new data
  */
 void AmclNode::updateParticleFilter(const pf_vector_t &pose,
                                     const sensor_msgs::LaserScanConstPtr& laser_scan,
-                                    int laser_index)
+                                    LaserInfoPtr laser_info)
 {
   pf_vector_t delta = pf_vector_zero();
 
@@ -1372,10 +1421,14 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
     update = update || m_force_update;
     m_force_update=false;
 
-    // Set the laser update flags
+    // Set update flag for all lasers
     if(update)
-      for(unsigned int i=0; i < lasers_update_.size(); i++)
-        lasers_update_[i] = true;
+    {
+      BOOST_FOREACH(frame_to_laser_t::value_type& kv, frame_to_laser_)
+      {
+        kv.second->update = true;
+      }
+    }
   }
 
   bool force_publication = false;
@@ -1387,16 +1440,18 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
     // Filter is now initialized
     pf_init_ = true;
 
-    // Should update sensor data
-    for(unsigned int i=0; i < lasers_update_.size(); i++)
-      lasers_update_[i] = true;
+    // Set update flag for all lasers
+    BOOST_FOREACH(frame_to_laser_t::value_type& kv, frame_to_laser_)
+    {
+      kv.second->update = true;
+    }
 
     force_publication = true;
 
     resample_count_ = 0;
   }
   // If the robot has moved, update the filter
-  else if(pf_init_ && lasers_update_[laser_index])
+  else if(pf_init_ && laser_info->update)
   {
     //printf("pose\n");
     //pf_vector_fprintf(pose, stdout, "%.3f");
@@ -1417,42 +1472,14 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
 
   bool resampled = false;
   // If the robot has moved, update the filter
-  if(lasers_update_[laser_index])
+  if(laser_info->update)
   {
     AMCLLaserData ldata;
-    ldata.sensor = lasers_[laser_index];
+    ldata.sensor = laser_info->laser;
     ldata.range_count = laser_scan->ranges.size();
 
-    // To account for lasers that are mounted upside-down, we determine the
-    // min, max, and increment angles of the laser in the base frame.
-    //
-    // Construct min and max angles of laser, in the base_link frame.
-    tf::Quaternion q;
-    q.setRPY(0.0, 0.0, laser_scan->angle_min);
-    tf::Stamped<tf::Quaternion> min_q(q, laser_scan->header.stamp,
-                                      laser_scan->header.frame_id);
-    q.setRPY(0.0, 0.0, laser_scan->angle_min + laser_scan->angle_increment);
-    tf::Stamped<tf::Quaternion> inc_q(q, laser_scan->header.stamp,
-                                      laser_scan->header.frame_id);
-    try
-    {
-      tf_->transformQuaternion(base_frame_id_, min_q, min_q);
-      tf_->transformQuaternion(base_frame_id_, inc_q, inc_q);
-    }
-    catch(tf::TransformException& e)
-    {
-      ROS_WARN("Unable to transform min/max laser angles into base frame: %s",
-               e.what());
-      return;
-    }
-
-    double angle_min = tf::getYaw(min_q);
-    double angle_increment = tf::getYaw(inc_q) - angle_min;
-
-    // wrapping angle to [-pi .. pi]
-    angle_increment = fmod(angle_increment + 5*M_PI, 2*M_PI) - M_PI;
-
-    ROS_DEBUG("Laser %d angles in base frame: min: %.3f inc: %.3f", laser_index, angle_min, angle_increment);
+    double angle_min = laser_info->angle_min;
+    double angle_increment = laser_info->angle_increment;
 
     // Apply range min/max thresholds, if the user supplied them
     if(laser_max_range_ > 0.0)
@@ -1480,9 +1507,9 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
               (i * angle_increment);
     }
 
-    lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
+    laser_info->laser->UpdateSensor(pf_, (AMCLSensorData*)&ldata);
 
-    lasers_update_[laser_index] = false;
+    laser_info->update = false;
 
     pf_odom_pose_ = pose;
 
