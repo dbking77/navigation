@@ -328,21 +328,6 @@ void usage()
 int
 main(int argc, char** argv)
 {
-  tf2::Quaternion q1(tf2::Vector3(0,0,1),  30 * M_PI/180.0);
-  tf2::Quaternion q2(tf2::Vector3(0,0,1), -25 * M_PI/180.0);
-
-  tf2::Quaternion q3(q1);
-  tf2::Quaternion q4(q2);
-
-  std::cerr << "q1 : " << (AmclNode::getYaw(q1)*180/M_PI) << std::endl
-            << "q2 : " << (AmclNode::getYaw(q2)*180/M_PI) << std::endl
-            << "q3 : " << (AmclNode::getYaw(q3)*180/M_PI) << std::endl
-            << "q4 : " << (AmclNode::getYaw(q4)*180/M_PI) << std::endl
-            << "q1*q2 : " << (AmclNode::getYaw(q1*q2)*180/M_PI) << std::endl
-            << "q2*q1 : " << (AmclNode::getYaw(q2*q1)*180/M_PI) << std::endl;
-
-  //exit(1);
-
   ros::init(argc, argv, "amcl");
   ros::NodeHandle nh;
 
@@ -703,7 +688,7 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
 
   cloud_pub_interval.fromSec(1.0);
 
-  //loadMapYaml(map_yaml_fn);
+  loadMapYaml(map_yaml_fn);
 
   if (publish_to_ros)
   {
@@ -1309,24 +1294,12 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
 
     double angle_min = laser_scan->angle_min;
     double angle_two = angle_min + laser_scan->angle_increment;
-
     tf2::Quaternion q_min(tf2::Vector3(0,0,1),angle_min);
     tf2::Quaternion q_two(tf2::Vector3(0,0,1),angle_two);
-
-    printRotation("q_min", q_min);
-    printRotation("q_two", q_two);
-
     q_min = transform*q_min;
     q_two = transform*q_two;
-
-    printRotation("q_min", q_min);
-    printRotation("q_two", q_two);
-
     angle_min = getYaw(q_min);
     angle_two = getYaw(q_two);
-    ROS_ERROR("Laser %s angles in base frame: min: %f two: %f",
-              laser_scan->header.frame_id.c_str(), angle_min, angle_two);
-
     // TODO use angles
     double angle_increment = fmod((angle_two-angle_min) + 5*M_PI, 2*M_PI) - M_PI;
 
@@ -1341,7 +1314,7 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
     pf_vector_t laser_pose_v;
     laser_pose_v.v[0] = transform.getOrigin()[0]; //0.235;
     laser_pose_v.v[1] = transform.getOrigin()[1]; //0.0;
-    // laser mounting angle gets computed later -> set to 0 here!
+    // laser mounting angle is part of angle_min and angle_incremetn -> set to 0 here!
     laser_pose_v.v[2] = 0;
     //lasers_[laser_index]->SetLaserPose(laser_pose_v);
     ROS_ERROR("Received laser's pose wrt robot: %.3f %.3f %.3f",
