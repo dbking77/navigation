@@ -56,6 +56,8 @@
 #include "tf2_ros/transform_broadcaster.h"
 #include "tf2_ros/transform_listener.h"
 #include "tf2_ros/message_filter.h"
+//#include "tf2_ros/Transform.h"
+#include "tf2/LinearMath/Transform.h"
 
 // For transform support
 #include "tf/transform_broadcaster.h"
@@ -139,6 +141,8 @@ class AmclNode
     int process();
     void savePoseToServer();
 
+    static double getYaw(const tf2::Quaternion &q);
+
   private:
     // Keep all information associated with a single laser in one struct
     struct LaserInfo : boost::noncopyable
@@ -191,7 +195,7 @@ class AmclNode
     void updatePoseFromServer();
     void applyInitialPose();
 
-    double getYaw(tf::Pose& t);
+    static double getYaw(tf::Pose& t);
 
     //parameter for what odom to use
     std::string odom_frame_id_;
@@ -324,6 +328,21 @@ void usage()
 int
 main(int argc, char** argv)
 {
+  tf2::Quaternion q1(tf2::Vector3(0,0,1),  30 * M_PI/180.0);
+  tf2::Quaternion q2(tf2::Vector3(0,0,1), -25 * M_PI/180.0);
+
+  tf2::Quaternion q3(q1);
+  tf2::Quaternion q4(q2);
+
+  std::cerr << "q1 : " << (AmclNode::getYaw(q1)*180/M_PI) << std::endl
+            << "q2 : " << (AmclNode::getYaw(q2)*180/M_PI) << std::endl
+            << "q3 : " << (AmclNode::getYaw(q3)*180/M_PI) << std::endl
+            << "q4 : " << (AmclNode::getYaw(q4)*180/M_PI) << std::endl
+            << "q1*q2 : " << (AmclNode::getYaw(q1*q2)*180/M_PI) << std::endl
+            << "q2*q1 : " << (AmclNode::getYaw(q2*q1)*180/M_PI) << std::endl;
+
+  //exit(1);
+
   ros::init(argc, argv, "amcl");
   ros::NodeHandle nh;
 
@@ -684,7 +703,7 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
 
   cloud_pub_interval.fromSec(1.0);
 
-  loadMapYaml(map_yaml_fn);
+  //loadMapYaml(map_yaml_fn);
 
   if (publish_to_ros)
   {
@@ -1225,6 +1244,24 @@ AmclNode::setMapCallback(nav_msgs::SetMap::Request& req,
   return true;
 }
 
+double AmclNode::getYaw(const tf2::Quaternion &q)
+{
+  double yaw, pitch, roll;
+  tf2::Matrix3x3(q).getEulerYPR(yaw,pitch,roll);
+  return yaw;
+}
+
+void printRotation(const char* name, const tf2::Quaternion &q)
+{
+  ROS_ERROR("Rotation %s, %f, %f, %f, %f",
+            name,
+            q.getAxis()[0],
+            q.getAxis()[1],
+            q.getAxis()[2],
+            q.getAngle()
+            );
+}
+
 
 /**
  * @brief Callback from bag-file based laser processing.  Should use tf2 instead of tf.
@@ -1237,24 +1274,28 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
   if( map_ == NULL )
   {
     std::cerr << "No map? : " << std::endl;
-    return;
+    //return;
   }
-
-  int laser_index = -1;
 
   // Do we have the base->base_laser Tx yet?
   if(frame_to_laser_.find(laser_scan->header.frame_id) == frame_to_laser_.end())
   {
     ROS_DEBUG("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan->header.frame_id.c_str());
-    //lasers_.push_back(new AMCLLaser(*laser_));
-    //lasers_update_.push_back(true);
-    laser_index = frame_to_laser_.size();
 
-    geometry_msgs::TransformStamped laser_transform;
+    tf2::Transform transform;
     try
     {
-      laser_transform =
+      geometry_msgs::TransformStamped geo_msg =
         tf_buffer_.lookupTransform(base_frame_id_, laser_scan->header.frame_id, ros::Time());
+
+      transform =
+        tf2::Transform(tf2::Quaternion(geo_msg.transform.rotation.x,
+                                       geo_msg.transform.rotation.y,
+                                       geo_msg.transform.rotation.z,
+                                       geo_msg.transform.rotation.w),
+                       tf2::Vector3(geo_msg.transform.translation.x,
+                                    geo_msg.transform.translation.y,
+                                    geo_msg.transform.translation.z));
     }
     catch(tf2::TransformException& ex)
     {
@@ -1266,20 +1307,40 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
       return;
     }
 
-    {
-      geometry_msgs::Quaternion q2 = laser_transform.transform.rotation;
-      ROS_ERROR("Received laser's rotation wrt robot2: %.3f %.3f %.3f %.3f",
-                q2.x, q2.y, q2.z, q2.w);
-      tf::Quaternion q(q2.x, q2.y, q2.z, q2.w);
-      tf::Vector3 v = q.getAxis();
-      double angle = q.getAngle();
-      ROS_ERROR("Received laser's rotation wrt robot: %.3f %.3f %.3f %.3f",
-                v.x(), v.y(), v.z(), angle);
-    }
+    double angle_min = laser_scan->angle_min;
+    double angle_two = angle_min + laser_scan->angle_increment;
+
+    tf2::Quaternion q_min(tf2::Vector3(0,0,1),angle_min);
+    tf2::Quaternion q_two(tf2::Vector3(0,0,1),angle_two);
+
+    printRotation("q_min", q_min);
+    printRotation("q_two", q_two);
+
+    q_min = transform*q_min;
+    q_two = transform*q_two;
+
+    printRotation("q_min", q_min);
+    printRotation("q_two", q_two);
+
+    angle_min = getYaw(q_min);
+    angle_two = getYaw(q_two);
+    ROS_ERROR("Laser %s angles in base frame: min: %f two: %f",
+              laser_scan->header.frame_id.c_str(), angle_min, angle_two);
+
+    // TODO use angles
+    double angle_increment = fmod((angle_two-angle_min) + 5*M_PI, 2*M_PI) - M_PI;
+
+    ROS_ERROR("Laser %s angles in base frame: min: %f inc: %f",
+              laser_scan->header.frame_id.c_str(), angle_min, angle_increment);
+
+    LaserInfoPtr laser_info(new LaserInfo);
+    laser_info->angle_min = angle_min;
+    laser_info->angle_increment = angle_increment;
+    laser_info->laser = new AMCLLaser(*laser_);
 
     pf_vector_t laser_pose_v;
-    laser_pose_v.v[0] = laser_transform.transform.translation.x; //0.235;
-    laser_pose_v.v[1] = laser_transform.transform.translation.y; //0.0;
+    laser_pose_v.v[0] = transform.getOrigin()[0]; //0.235;
+    laser_pose_v.v[1] = transform.getOrigin()[1]; //0.0;
     // laser mounting angle gets computed later -> set to 0 here!
     laser_pose_v.v[2] = 0;
     //lasers_[laser_index]->SetLaserPose(laser_pose_v);
@@ -1288,10 +1349,7 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
               laser_pose_v.v[1],
               laser_pose_v.v[2]);
 
-    //frame_to_laser_[laser_scan->header.frame_id] = laser_index;
-  } else {
-    // we have the laser pose, retrieve laser index
-    //laser_index = frame_to_laser_[laser_scan->header.frame_id];
+    frame_to_laser_[laser_scan->header.frame_id] = laser_info;
   }
 
   // Where was the robot when this scan was taken?
@@ -1303,9 +1361,20 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
     return;
   }
 
-  //updateParticleFilter(pose, laser_scan, laser_index);
+  updateParticleFilter(pose, laser_scan, frame_to_laser_[laser_scan->header.frame_id]);
 }
 
+
+void printRotation(const char* name, const tf::Stamped<tf::Quaternion> &q)
+{
+  ROS_ERROR("Rotation %s, %f, %f, %f, %f",
+            name,
+            q.getAxis()[0],
+            q.getAxis()[1],
+            q.getAxis()[2],
+            q.getAngle()
+            );
+}
 
 void
 AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
@@ -1315,12 +1384,15 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     return;
   }
   boost::recursive_mutex::scoped_lock lr(configuration_mutex_);
-  int laser_index = -1;
 
   // Do we have the base->base_laser Tx yet?
   if(frame_to_laser_.find(laser_scan->header.frame_id) == frame_to_laser_.end())
   {
     ROS_DEBUG("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan->header.frame_id.c_str());
+
+    ROS_ERROR("Laser %s angles in base frame: min: %f inc: %f",
+              laser_scan->header.frame_id.c_str(),
+              laser_scan->angle_min, laser_scan->angle_increment);
 
     // To account for lasers that are mounted upside-down, we determine the
     // min, max, and increment angles of the laser in the base frame.
@@ -1333,6 +1405,9 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     q.setRPY(0.0, 0.0, laser_scan->angle_min + laser_scan->angle_increment);
     tf::Stamped<tf::Quaternion> inc_q(q, laser_scan->header.stamp,
                                       laser_scan->header.frame_id);
+
+    printRotation("inc_q", inc_q);
+    printRotation("min_q", min_q);
 
     tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
                                              tf::Vector3(0,0,0)),
@@ -1353,6 +1428,9 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       return;
     }
 
+    printRotation("inc_q2", inc_q);
+    printRotation("min_q2", min_q);
+
     double angle_min = tf::getYaw(min_q);
     double angle_increment = tf::getYaw(inc_q) - angle_min;
 
@@ -1360,7 +1438,8 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     // TODO use angles
     angle_increment = fmod(angle_increment + 5*M_PI, 2*M_PI) - M_PI;
 
-    ROS_DEBUG("Laser %d angles in base frame: min: %.3f inc: %.3f", laser_index, angle_min, angle_increment);
+    ROS_ERROR("Laser %s angles in base frame: min: %f inc: %f",
+              laser_scan->header.frame_id.c_str(), angle_min, angle_increment);
 
     LaserInfoPtr laser_info(new LaserInfo);
     laser_info->angle_min = angle_min;
