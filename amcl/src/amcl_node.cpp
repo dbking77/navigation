@@ -133,8 +133,6 @@ class AmclNode
 
   void run(const std::string &in_bag_fn,
            const std::string &out_bag_fn);
-  void bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan);
-
 
     ~AmclNode();
 
@@ -181,9 +179,15 @@ class AmclNode
                         nav_msgs::SetMap::Response& res);
 
     void laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan);
+    void bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan);
+
     void initialPoseReceived(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg);
     void handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStamped& msg);
     void mapReceived(const nav_msgs::OccupancyGridConstPtr& msg);
+
+  bool transformMapToOdom(const pf_vector_t &pose,
+                          const ros::Time &time,
+                          tf::Stamped<tf::Pose> &output);
 
     void updateParticleFilter(const pf_vector_t &pose,
                               const sensor_msgs::LaserScanConstPtr& laser_scan,
@@ -1117,7 +1121,7 @@ AmclNode::getOdomPose(tf::Stamped<tf::Pose>& odom_pose,
   double pitch,roll;
   odom_pose.getBasis().getEulerYPR(yaw, pitch, roll);
 
-  ROS_ERROR("%s to odom, %f %f %f", f.c_str(), x, y, yaw);
+  //ROS_ERROR("%s to odom, %f %f %f", f.c_str(), x, y, yaw);
 
   return true;
 }
@@ -1149,7 +1153,7 @@ AmclNode::getBagOdomPose(double& x, double& y, double& yaw,
   yaw = 2.0*atan2(transform.transform.rotation.z,
                   transform.transform.rotation.w);
 
-  ROS_ERROR("%s to odom, %f %f %f", source_frame_id.c_str(), x, y, yaw);
+  //ROS_ERROR("%s to odom, %f %f %f", source_frame_id.c_str(), x, y, yaw);
 
   return true;
 }
@@ -1337,7 +1341,6 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
   updateParticleFilter(pose, laser_scan, frame_to_laser_[laser_scan->header.frame_id]);
 }
 
-
 void printRotation(const char* name, const tf::Stamped<tf::Quaternion> &q)
 {
   ROS_ERROR("Rotation %s, %f, %f, %f, %f",
@@ -1348,6 +1351,38 @@ void printRotation(const char* name, const tf::Stamped<tf::Quaternion> &q)
             q.getAngle()
             );
 }
+
+void printPose(const char* name, const tf::Stamped<tf::Pose> &pose)
+{
+  double angle = tf::getYaw(pose.getRotation());
+  ROS_ERROR("Transform %s wrt %s : x=%f y=%f angle=%f",
+            name,
+            pose.frame_id_.c_str(),
+            pose.getOrigin()[0],
+            pose.getOrigin()[1],
+            (angle*180/M_PI)
+            );
+}
+
+
+void printTransform(const char* name,
+                    const std::string target,
+                    const std::string source,
+                    const tf::StampedTransform &t)
+{
+  double angle = tf::getYaw(t.getRotation());
+  ROS_ERROR("Transform %s : target=%s, source=%s : frame=%s, child=%s : x=%f y=%f angle=%f",
+            name,
+            target.c_str(),
+            source.c_str(),
+            t.frame_id_.c_str(),
+            t.child_frame_id_.c_str(),
+            t.getOrigin()[0],
+            t.getOrigin()[1],
+            (angle*180/M_PI)
+            );
+}
+
 
 void
 AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
@@ -1444,6 +1479,61 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   }
 
   updateParticleFilter(pose, laser_scan, frame_to_laser_[laser_scan->header.frame_id]);
+}
+
+
+/**
+ * @brief Calculate transform from particle position in global/map frame to odom frame
+ * @param pose pose of particle (robot_base_frame) relative to the global_frame (map)
+ * @param time to lookup transform for
+ * @param output reference where transform can be stored
+ * @returns Returns true if transform can be calculated, false otherwise
+ */
+bool AmclNode::transformMapToOdom(const pf_vector_t &pose,
+                                  const ros::Time &time,
+                                  tf::Stamped<tf::Pose> &output)
+{
+  // Particle position
+  // subtracting base to odom from map to base and send map to odom instead
+  // Transform from particle position (robot base) to map
+
+  tf::Stamped<tf::Pose> odom_to_map;
+  try
+  {
+    // The particle position is position of base wrt map
+    tf::Transform tmp_tf(tf::createQuaternionFromYaw(pose.v[2]),
+                         tf::Vector3(pose.v[0], pose.v[1], 0.0));
+
+    printPose("particle", tf::Stamped<tf::Pose>(tmp_tf, time, global_frame_id_));
+
+    // This is inverse, so the position of map wrt to base
+    tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
+                                          time,
+                                          base_frame_id_);
+
+    printPose(global_frame_id_.c_str(), tmp_tf_stamped);
+
+    // This transforms pose in base frame to odom frame
+    this->tf_->transformPose(odom_frame_id_,
+                             tmp_tf_stamped,
+                             output);
+
+    tf::StampedTransform t1;
+    this->tf_->lookupTransform(odom_frame_id_, base_frame_id_, ros::Time(), t1);
+    printTransform("t1", odom_frame_id_, base_frame_id_, t1);
+
+    tf::StampedTransform t2;
+    this->tf_->lookupTransform(base_frame_id_, odom_frame_id_, ros::Time(), t2);
+    printTransform("t2", base_frame_id_, odom_frame_id_, t2);
+
+    printPose("?", output);
+  }
+  catch(tf::TransformException)
+  {
+    ROS_DEBUG("Failed to subtract base to odom transform");
+    return false;
+  }
+  return true;
 }
 
 
@@ -1682,22 +1772,10 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
 
       // subtracting base to odom from map to base and send map to odom instead
       tf::Stamped<tf::Pose> odom_to_map;
-      try
+      if (!transformMapToOdom(hyps[max_weight_hyp].pf_pose_mean,
+                              laser_scan->header.stamp,
+                              odom_to_map))
       {
-        tf::Transform tmp_tf(tf::createQuaternionFromYaw(hyps[max_weight_hyp].pf_pose_mean.v[2]),
-                             tf::Vector3(hyps[max_weight_hyp].pf_pose_mean.v[0],
-                                         hyps[max_weight_hyp].pf_pose_mean.v[1],
-                                         0.0));
-        tf::Stamped<tf::Pose> tmp_tf_stamped (tmp_tf.inverse(),
-                                              laser_scan->header.stamp,
-                                              base_frame_id_);
-        this->tf_->transformPose(odom_frame_id_,
-                                 tmp_tf_stamped,
-                                 odom_to_map);
-      }
-      catch(tf::TransformException)
-      {
-        ROS_DEBUG("Failed to subtract base to odom transform");
         return;
       }
 
@@ -1714,6 +1792,10 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
         tf::StampedTransform tmp_tf_stamped(latest_tf_.inverse(),
                                             transform_expiration,
                                             global_frame_id_, odom_frame_id_);
+
+        printTransform("odom_to_map", "", "", tf::StampedTransform(latest_tf_, transform_expiration, odom_frame_id_, global_frame_id_));
+        printTransform("broadcast", "", "", tmp_tf_stamped);
+
         this->tfb_->sendTransform(tmp_tf_stamped);
         sent_first_transform_ = true;
       }
