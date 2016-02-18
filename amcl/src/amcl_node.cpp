@@ -147,6 +147,7 @@ class AmclNode
   // Runs
   AmclNode(const std::string &config_yaml_fn,
            const std::string &map_yaml_fn,
+           const std::string &initial_pose_yaml_fn,
            bool publish_to_ros);
 
   void loadMapYaml(const std::string &map_yaml_fn);
@@ -239,6 +240,9 @@ class AmclNode
     //parameter for what base to use
     std::string base_frame_id_;
     std::string global_frame_id_;
+
+    /// True if running from bag file
+    bool running_from_bag_;
 
     bool use_map_topic_;
     bool first_map_only_;
@@ -352,7 +356,7 @@ void sigintHandler(int sig)
 
 void usage()
 {
-  std::cerr << "Usage : amcl | amcl <config.yaml> <map.yaml> <in.bag> <out.bag>" << std::endl;
+  std::cerr << "Usage : amcl | amcl <config.yaml> <map.yaml> <initial_pose.yaml> <in.bag> <out.bag>" << std::endl;
 }
 
 int
@@ -369,10 +373,10 @@ main(int argc, char** argv)
   {
     amcl_node_ptr.reset(new AmclNode());
   }
-  else if (argc == 5)
+  else if (argc == 6)
   {
-    amcl_node_ptr.reset(new AmclNode(argv[1], argv[2], true));
-    amcl_node_ptr->run(argv[3], argv[4]);
+    amcl_node_ptr.reset(new AmclNode(argv[1], argv[2], argv[3], true));
+    amcl_node_ptr->run(argv[4], argv[5]);
   }
   else
   {
@@ -393,6 +397,7 @@ main(int argc, char** argv)
 AmclNode::AmclNode() :
         tfb_(NULL),
         tf_(NULL),
+        running_from_bag_(false),
         sent_first_transform_(false),
         latest_tf_valid_(false),
         map_(NULL),
@@ -621,9 +626,11 @@ void AmclNode::run(const std::string &in_bag_fn,
 // Runs
 AmclNode::AmclNode(const std::string &config_yaml_fn,
                    const std::string &map_yaml_fn,
+                   const std::string &initial_pose_yaml_fn,
                    bool publish_to_ros) :
         tfb_(NULL),
         tf_(NULL),
+        running_from_bag_(true),
         sent_first_transform_(false),
         latest_tf_valid_(false),
         map_(NULL),
@@ -640,7 +647,11 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
   YAML::Node config = YAML::LoadFile(config_yaml_fn);
   std::cerr << "Done loading config file" << std::endl;
 
-  updatePoseFromYaml(config);
+
+  std::cerr << "Loading initial pose file : " << initial_pose_yaml_fn << std::endl;
+  YAML::Node initial_pose = YAML::LoadFile(initial_pose_yaml_fn);
+  updatePoseFromYaml(initial_pose);
+  std::cerr << "Done loading initial pose " << std::endl;
 
   double tmp = config["gui_publish_rate"].as<double>(); //-1.0
   gui_publish_period = ros::Duration(1.0/tmp);
@@ -751,7 +762,7 @@ void AmclNode::reconfigureCB(AMCLConfig &config, uint32_t level)
     return;
   }
 
-  if(config.restore_defaults) {
+  if(config.restore_defaults){
     config = default_config_;
     //avoid looping
     config.restore_defaults = false;
@@ -907,21 +918,13 @@ void AmclNode::savePoseToServer()
 
 void AmclNode::updatePoseFromYaml(YAML::Node &node)
 {
-  ROS_ERROR("Update Pose From Yaml");
-  /*
-  init_pose_[0] = 0.0;
-  init_pose_[1] = 0.0;
-  init_pose_[2] = 0.0;
-  init_cov_[0] = 0.5 * 0.5;
-  init_cov_[1] = 0.5 * 0.5;
-  init_cov_[2] = (M_PI/12.0) * (M_PI/12.0);
-  */
-  init_pose_[0] = 111.7;
-  init_pose_[1] = 244.0;
-  init_pose_[2] = -2.4;
-  init_cov_[0] = 0.5 * 0.5;
-  init_cov_[1] = 0.5 * 0.5;
-  init_cov_[2] = (M_PI/12.0) * (M_PI/12.0);
+  std::cerr << "Update Pose From Yaml" << std::endl;
+  init_pose_[0] = node["pose_x"].as<double>();
+  init_pose_[1] = node["pose_y"].as<double>();
+  init_pose_[2] = node["pose_theta"].as<double>();
+  init_cov_[0] = node["cov_x"].as<double>();
+  init_cov_[1] = node["cov_y"].as<double>();
+  init_cov_[2] = node["cov_theta"].as<double>();
 }
 
 void AmclNode::updatePoseFromServer()
@@ -1045,10 +1048,12 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   pf_->pop_err = pf_err_;
   pf_->pop_z = pf_z_;
 
+  if (!running_from_bag_)
+  {
+    updatePoseFromServer();
+  }
+
   // Initialize the filter
-  //updatePoseFromServer();  // TODO move this somewhere else? - or handle ros / non-ros setup
-  YAML::Node node;
-  updatePoseFromYaml(node);
   pf_vector_t pf_init_pose_mean = pf_vector_zero();
   pf_init_pose_mean.v[0] = init_pose_[0];
   pf_init_pose_mean.v[1] = init_pose_[1];
