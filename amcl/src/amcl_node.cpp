@@ -225,6 +225,7 @@ class AmclNode
     void freeMapDependentMemory();
     map_t* convertMap( const nav_msgs::OccupancyGrid& map_msg );
     void updatePoseFromServer();
+    void updatePoseFromYaml(YAML::Node &node);
     void applyInitialPose();
 
     static double getYaw(tf::Pose& t);
@@ -639,6 +640,8 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
   YAML::Node config = YAML::LoadFile(config_yaml_fn);
   std::cerr << "Done loading config file" << std::endl;
 
+  updatePoseFromYaml(config);
+
   double tmp = config["gui_publish_rate"].as<double>(); //-1.0
   gui_publish_period = ros::Duration(1.0/tmp);
 
@@ -901,6 +904,26 @@ void AmclNode::savePoseToServer()
                                   last_published_pose.pose.covariance[6*5+5]);
 }
 
+
+void AmclNode::updatePoseFromYaml(YAML::Node &node)
+{
+  ROS_ERROR("Update Pose From Yaml");
+  /*
+  init_pose_[0] = 0.0;
+  init_pose_[1] = 0.0;
+  init_pose_[2] = 0.0;
+  init_cov_[0] = 0.5 * 0.5;
+  init_cov_[1] = 0.5 * 0.5;
+  init_cov_[2] = (M_PI/12.0) * (M_PI/12.0);
+  */
+  init_pose_[0] = 111.7;
+  init_pose_[1] = 244.0;
+  init_pose_[2] = -2.4;
+  init_cov_[0] = 0.5 * 0.5;
+  init_cov_[1] = 0.5 * 0.5;
+  init_cov_[2] = (M_PI/12.0) * (M_PI/12.0);
+}
+
 void AmclNode::updatePoseFromServer()
 {
   init_pose_[0] = 0.0;
@@ -942,6 +965,7 @@ void AmclNode::updatePoseFromServer()
   else
     ROS_WARN("ignoring NAN in initial covariance AA");
 }
+
 
 void
 AmclNode::checkLaserReceived(const ros::TimerEvent& event)
@@ -1022,7 +1046,9 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   pf_->pop_z = pf_z_;
 
   // Initialize the filter
-  updatePoseFromServer();
+  //updatePoseFromServer();  // TODO move this somewhere else? - or handle ros / non-ros setup
+  YAML::Node node;
+  updatePoseFromYaml(node);
   pf_vector_t pf_init_pose_mean = pf_vector_zero();
   pf_init_pose_mean.v[0] = init_pose_[0];
   pf_init_pose_mean.v[1] = init_pose_[1];
@@ -1286,7 +1312,10 @@ void printRotation(const char* name, const tf2::Quaternion &q)
  */
 void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
 {
-  std::cerr << "bagLaserReceived : " << laser_scan->header.seq << std::endl;
+  if ((laser_scan->header.seq % 100) == 0)
+  {
+    std::cerr << "bagLaserReceived : " << laser_scan->header.seq << std::endl;
+  }
 
   last_laser_received_ts_ = ros::Time::now();
   if( map_ == NULL )
@@ -1836,7 +1865,6 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
 
       // Use best particle position hypothesis to calcutlate
       // transform from odom to map frame
-      std::cerr << "Tf " << this->tf_ << std::endl;
       if (this->tf_)
       {
         if (!transformOdomToMap(hyps[max_weight_hyp].pf_pose_mean,
@@ -1875,7 +1903,7 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
       ros::Time transform_expiration = (laser_scan->header.stamp +
                                         transform_tolerance_);
       latest_tf_odom_wrt_map_.stamp_ = transform_expiration;
-      printTransform("broadcast", "", "", latest_tf_odom_wrt_map_);
+      //printTransform("broadcast", "", "", latest_tf_odom_wrt_map_);
 
       this->tfb_->sendTransform(latest_tf_odom_wrt_map_);
       sent_first_transform_ = true;
