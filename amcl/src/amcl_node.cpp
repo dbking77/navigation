@@ -166,7 +166,7 @@ class AmclNode
     /* latest trasfrom from odom frame with respect to (WRT) map frame
      * note that this was opposite of latest_tf_ which was calculation of map wrt odom
      */
-    tf::Transform latest_tf_;
+    //tf::Transform latest_tf_;
     tf::StampedTransform latest_tf_odom_wrt_map_;
     bool latest_tf_valid_;
 
@@ -866,7 +866,7 @@ void AmclNode::savePoseToServer()
   // We need to apply the last transform to the latest odom pose to get
   // the latest map pose to store.  We'll take the covariance from
   // last_published_pose.
-  tf::Pose map_pose = latest_tf_.inverse() * latest_odom_pose_;
+  tf::Pose map_pose = latest_tf_odom_wrt_map_ * latest_odom_pose_;
   double yaw,pitch,roll;
   map_pose.getBasis().getEulerYPR(yaw, pitch, roll);
 
@@ -1551,7 +1551,7 @@ bool AmclNode::transformMapToOdom(const pf_vector_t &pose,
 
 
 /**
- * @brief Calculate transform of odom frame wrt map frame
+ * @brief Calculate transform of odom frame wrt map frame using particle position
  * @param pose particle filter pose which is represents trasnform from base frame to map frame
  * @param time to lookup transform for
  * @param output where result transform will be stored
@@ -1567,7 +1567,7 @@ bool AmclNode::transformOdomToMap(const pf_vector_t &pose,
     tf::StampedTransform tf_odom_wrt_base;
     this->tf_->lookupTransform(base_frame_id_, odom_frame_id_, time, tf_odom_wrt_base);
 
-    // This is base w.r.t. map : T(base-map)
+    // Particle pose represents the position of the robot base w.r.t. the map : T(base-map)
     tf::Transform tf_base_wrt_map(tf::createQuaternionFromYaw(pose.v[2]),
                                   tf::Vector3(pose.v[0], pose.v[1], 0.0));
 
@@ -1577,7 +1577,7 @@ bool AmclNode::transformOdomToMap(const pf_vector_t &pose,
     tf::Transform tmp = tf_base_wrt_map * tf_odom_wrt_base;
     tf_odom_wrt_map = tf::StampedTransform(tmp, time, global_frame_id_, odom_frame_id_);
 
-    printTransform("tf_odom_wrt_map", "", "", tf_odom_wrt_map);
+    //printTransform("tf_odom_wrt_map", "", "", tf_odom_wrt_map);
   }
   catch(tf::TransformException)
   {
@@ -1821,64 +1821,45 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
                hyps[max_weight_hyp].pf_pose_mean.v[1],
                hyps[max_weight_hyp].pf_pose_mean.v[2]);
 
-      // subtracting base to odom from map to base and send map to odom instead
-      tf::Stamped<tf::Pose> odom_to_map;
-      if (!transformMapToOdom(hyps[max_weight_hyp].pf_pose_mean,
+
+      // Use best particle position hypothesis to calcutlate
+      // transform from odom to map frame
+      if (!transformOdomToMap(hyps[max_weight_hyp].pf_pose_mean,
                               laser_scan->header.stamp,
-                              odom_to_map))
+                              latest_tf_odom_wrt_map_))
       {
         return;
       }
-
-      if (!transformMapToOdom(hyps[max_weight_hyp].pf_pose_mean,
-                              laser_scan->header.stamp,
-                              odom_to_map))
-      {
-        return;
-      }
-
-      transformOdomToMap(hyps[max_weight_hyp].pf_pose_mean,
-                         laser_scan->header.stamp,
-                         latest_tf_odom_wrt_map_);
-
-      latest_tf_ = tf::Transform(tf::Quaternion(odom_to_map.getRotation()),
-                                 tf::Point(odom_to_map.getOrigin()));
       latest_tf_valid_ = true;
-
-      if (tf_broadcast_ == true)
-      {
-        // We want to send a transform that is good up until a
-        // tolerance time so that odom can be used
-        ros::Time transform_expiration = (laser_scan->header.stamp +
-                                          transform_tolerance_);
-        tf::StampedTransform tmp_tf_stamped(latest_tf_.inverse(),
-                                            transform_expiration,
-                                            global_frame_id_, odom_frame_id_);
-
-        //printTransform("odom_to_map", "", "", tf::StampedTransform(latest_tf_, transform_expiration, odom_frame_id_, global_frame_id_));
-        printTransform("broadcast", "", "", tmp_tf_stamped);
-
-        this->tfb_->sendTransform(tmp_tf_stamped);
-        sent_first_transform_ = true;
-      }
     }
     else
     {
       ROS_ERROR("No pose!");
     }
   }
-  else if(latest_tf_valid_)
+
+
+  if(latest_tf_valid_)
   {
     if (tf_broadcast_ == true)
     {
-      // Nothing changed, so we'll just republish the last transform, to keep
-      // everybody happy.
+      // We want to send a transform that is good up until a
+      // tolerance time so that odom can be used
       ros::Time transform_expiration = (laser_scan->header.stamp +
                                         transform_tolerance_);
-      tf::StampedTransform tmp_tf_stamped(latest_tf_.inverse(),
-                                          transform_expiration,
-                                          global_frame_id_, odom_frame_id_);
-      this->tfb_->sendTransform(tmp_tf_stamped);
+      latest_tf_odom_wrt_map_.stamp_ = transform_expiration;
+
+      /*
+        tf::StampedTransform tmp_tf_stamped(latest_tf_.inverse(),
+        transform_expiration,
+        global_frame_id_, odom_frame_id_);
+
+        //printTransform("odom_to_map", "", "", tf::StampedTransform(latest_tf_, transform_expiration, odom_frame_id_, global_frame_id_));
+        printTransform("broadcast", "", "", tmp_tf_stamped);
+      */
+
+      this->tfb_->sendTransform(latest_tf_odom_wrt_map_);
+      sent_first_transform_ = true;
     }
 
     // Is it time to save our last pose to the param server
