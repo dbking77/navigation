@@ -161,7 +161,13 @@ class AmclNode
 
     bool sent_first_transform_;
 
+    //tf::Transform latest_tf_;
+
+    /* latest trasfrom from odom frame with respect to (WRT) map frame
+     * note that this was opposite of latest_tf_ which was calculation of map wrt odom
+     */
     tf::Transform latest_tf_;
+    tf::StampedTransform latest_tf_odom_wrt_map_;
     bool latest_tf_valid_;
 
     // Pose-generating function used to uniformly distribute particles over
@@ -185,9 +191,14 @@ class AmclNode
     void handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStamped& msg);
     void mapReceived(const nav_msgs::OccupancyGridConstPtr& msg);
 
-  bool transformMapToOdom(const pf_vector_t &pose,
-                          const ros::Time &time,
-                          tf::Stamped<tf::Pose> &output);
+
+    bool transformOdomToMap(const pf_vector_t &pose,
+                            const ros::Time &time,
+                            tf::StampedTransform &tf_odom_wrt_map);
+
+    bool transformMapToOdom(const pf_vector_t &pose,
+                            const ros::Time &time,
+                            tf::Stamped<tf::Pose> &output);
 
     void updateParticleFilter(const pf_vector_t &pose,
                               const sensor_msgs::LaserScanConstPtr& laser_scan,
@@ -1514,6 +1525,8 @@ bool AmclNode::transformMapToOdom(const pf_vector_t &pose,
     printPose(global_frame_id_.c_str(), tmp_tf_stamped);
 
     // This transforms pose in base frame to odom frame
+    // transformPose = lookupTransform(target_frame, in.frame_id_, in.stamp_, transform)
+    // output = transform * in
     this->tf_->transformPose(odom_frame_id_,
                              tmp_tf_stamped,
                              output);
@@ -1527,6 +1540,44 @@ bool AmclNode::transformMapToOdom(const pf_vector_t &pose,
     printTransform("t2", base_frame_id_, odom_frame_id_, t2);
 
     printPose("?", output);
+  }
+  catch(tf::TransformException)
+  {
+    ROS_DEBUG("Failed to subtract base to odom transform");
+    return false;
+  }
+  return true;
+}
+
+
+/**
+ * @brief Calculate transform of odom frame wrt map frame
+ * @param pose particle filter pose which is represents trasnform from base frame to map frame
+ * @param time to lookup transform for
+ * @param output where result transform will be stored
+ * @returns Returns true if transform can be calculated, false otherwise
+ */
+bool AmclNode::transformOdomToMap(const pf_vector_t &pose,
+                                  const ros::Time &time,
+                                  tf::StampedTransform &tf_odom_wrt_map)
+{
+  try
+  {
+    // Lookup transform from odom w.r.t base : T(odom-base)
+    tf::StampedTransform tf_odom_wrt_base;
+    this->tf_->lookupTransform(base_frame_id_, odom_frame_id_, time, tf_odom_wrt_base);
+
+    // This is base w.r.t. map : T(base-map)
+    tf::Transform tf_base_wrt_map(tf::createQuaternionFromYaw(pose.v[2]),
+                                  tf::Vector3(pose.v[0], pose.v[1], 0.0));
+
+    // This is transform of odom w.r.t map : T(odom-map)
+    // T(odom-map) = T(base-map) * T(odom-base)
+    //tf::Transform tmp = tf::StampedTransform(tf_base_wrt_map,time,"","") * tf_odom_wrt_base;
+    tf::Transform tmp = tf_base_wrt_map * tf_odom_wrt_base;
+    tf_odom_wrt_map = tf::StampedTransform(tmp, time, global_frame_id_, odom_frame_id_);
+
+    printTransform("tf_odom_wrt_map", "", "", tf_odom_wrt_map);
   }
   catch(tf::TransformException)
   {
@@ -1779,6 +1830,17 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
         return;
       }
 
+      if (!transformMapToOdom(hyps[max_weight_hyp].pf_pose_mean,
+                              laser_scan->header.stamp,
+                              odom_to_map))
+      {
+        return;
+      }
+
+      transformOdomToMap(hyps[max_weight_hyp].pf_pose_mean,
+                         laser_scan->header.stamp,
+                         latest_tf_odom_wrt_map_);
+
       latest_tf_ = tf::Transform(tf::Quaternion(odom_to_map.getRotation()),
                                  tf::Point(odom_to_map.getOrigin()));
       latest_tf_valid_ = true;
@@ -1793,7 +1855,7 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
                                             transform_expiration,
                                             global_frame_id_, odom_frame_id_);
 
-        printTransform("odom_to_map", "", "", tf::StampedTransform(latest_tf_, transform_expiration, odom_frame_id_, global_frame_id_));
+        //printTransform("odom_to_map", "", "", tf::StampedTransform(latest_tf_, transform_expiration, odom_frame_id_, global_frame_id_));
         printTransform("broadcast", "", "", tmp_tf_stamped);
 
         this->tfb_->sendTransform(tmp_tf_stamped);
