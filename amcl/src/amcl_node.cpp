@@ -400,9 +400,9 @@ main(int argc, char** argv)
 AmclNode::AmclNode() :
         tfb_(NULL),
         tf_(NULL),
-        running_from_bag_(false),
         sent_first_transform_(false),
         latest_tf_valid_(false),
+        running_from_bag_(false),
         map_(NULL),
         pf_(NULL),
         resample_count_(0),
@@ -555,7 +555,7 @@ void AmclNode::loadMapYaml(const std::string &map_yaml_fn)
   bool trinary = true;
   if (map["trinary"])
   {
-    bool trinary = map["trinary"].as<bool>();
+    trinary = map["trinary"].as<bool>();
   }
 
   // Provide fully qualified path for image
@@ -651,9 +651,9 @@ AmclNode::AmclNode(const std::string &config_yaml_fn,
                    bool publish_to_ros) :
         tfb_(NULL),
         tf_(NULL),
-        running_from_bag_(true),
         sent_first_transform_(false),
         latest_tf_valid_(false),
+        running_from_bag_(true),
         map_(NULL),
         pf_(NULL),
         resample_count_(0),
