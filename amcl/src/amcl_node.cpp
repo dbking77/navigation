@@ -559,7 +559,7 @@ void AmclNode::loadMapYaml(const std::string &map_yaml_fn)
   }
 
   // Provide fully qualified path for image
-  if(image_fn.size() == 0)
+  if(image_fn.empty())
   {
     throw std::runtime_error("The image tag cannot be an empty string.");
   }
@@ -1567,6 +1567,11 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
 }
 
 
+tf::Quaternion fastCreateQuaternionFromYaw(double yaw_angle)
+{
+  return tf::Quaternion(0,0,sin(yaw_angle/2),cos(yaw_angle/2));
+}
+
 /**
  * @brief Calculate transform of odom frame wrt map frame using particle position
  * @param pose particle filter pose which is represents trasnform from base frame to map frame
@@ -1585,8 +1590,9 @@ bool AmclNode::transformOdomToMap(const pf_vector_t &pose,
     this->tf_->lookupTransform(base_frame_id_, odom_frame_id_, time, tf_odom_wrt_base);
 
     // Particle pose represents the position of the robot base w.r.t. the map : T(base-map)
-    tf::Transform tf_base_wrt_map(tf::createQuaternionFromYaw(pose.v[2]),
+    tf::Transform tf_base_wrt_map(fastCreateQuaternionFromYaw(pose.v[2]),
                                   tf::Vector3(pose.v[0], pose.v[1], 0.0));
+
 
     // This is transform of odom w.r.t map : T(odom-map)
     // T(odom-map) = T(base-map) * T(odom-base)
@@ -1792,7 +1798,7 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
       cloud_msg.poses.resize(set->sample_count);
       for(int i=0;i<set->sample_count;i++)
       {
-        tf::poseTFToMsg(tf::Pose(tf::createQuaternionFromYaw(set->samples[i].pose.v[2]),
+        tf::poseTFToMsg(tf::Pose(fastCreateQuaternionFromYaw(set->samples[i].pose.v[2]),
                                  tf::Vector3(set->samples[i].pose.v[0],
                                            set->samples[i].pose.v[1], 0)),
                         cloud_msg.poses[i]);
@@ -1851,7 +1857,7 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
       // Copy in the pose
       p.pose.pose.position.x = hyps[max_weight_hyp].pf_pose_mean.v[0];
       p.pose.pose.position.y = hyps[max_weight_hyp].pf_pose_mean.v[1];
-      tf::quaternionTFToMsg(tf::createQuaternionFromYaw(hyps[max_weight_hyp].pf_pose_mean.v[2]),
+      tf::quaternionTFToMsg(fastCreateQuaternionFromYaw(hyps[max_weight_hyp].pf_pose_mean.v[2]),
                             p.pose.pose.orientation);
       // Copy in the covariance, converting from 3-D to 6-D
       pf_sample_set_t* set = pf_->sets + pf_->current_set;
