@@ -5,6 +5,7 @@
 
 from __future__ import print_function
 
+from math import pi
 import pylab
 import rosbag
 import sys
@@ -50,17 +51,18 @@ def plot_bag(bagfn, color):
 
     pylab.figure("path")
     pylab.plot(x,y,color)
+    pylab.axis('equal')
 
     std_r = pylab.sqrt(cxx+cyy)
     pylab.figure("radial std")
     pylab.plot(t, std_r, color)
 
-    std_a = pylab.sqrt(caa)
+    std_a = pylab.sqrt(caa)*(180/pi)
     pylab.figure("angular std")
     pylab.plot(t, std_a, color)
 
     print("  radial std  \tavg=%.3f \tmax=%.3f" % (std_r.mean(), std_r.max()))
-    print("  angular std \tavg=%.3f \tmax=%.3f" % (std_r.mean(), std_r.max()))
+    print("  angular std \tavg=%.3f \tmax=%.3f" % (std_a.mean(), std_a.max()))
 
 
 def main():
