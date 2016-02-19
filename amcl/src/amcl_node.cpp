@@ -144,16 +144,16 @@ class AmclNode
   public:
     AmclNode();
 
-  // Runs
-  AmclNode(const std::string &config_yaml_fn,
-           const std::string &map_yaml_fn,
-           const std::string &initial_pose_yaml_fn,
-           bool publish_to_ros);
+    // Runs
+    AmclNode(const std::string &config_yaml_fn,
+             const std::string &map_yaml_fn,
+             const std::string &initial_pose_yaml_fn,
+             bool publish_to_ros);
 
-  void loadMapYaml(const std::string &map_yaml_fn);
+    void loadMapYaml(const std::string &map_yaml_fn);
 
-  void run(const std::string &in_bag_fn,
-           const std::string &out_bag_fn);
+    void run(const std::string &in_bag_fn,
+             const std::string &out_bag_fn);
 
     ~AmclNode();
 
@@ -179,6 +179,9 @@ class AmclNode
     tf::TransformListener* tf_;
 
     tf2_ros::Buffer tf_buffer_;
+
+    // Bag file where output poses can be stored
+    boost::shared_ptr<rosbag::Bag> out_bag_;
 
     bool sent_first_transform_;
 
@@ -582,6 +585,13 @@ void AmclNode::run(const std::string &in_bag_fn,
   rosbag::Bag bag;
   bag.open(in_bag_fn, rosbag::bagmode::Read);
 
+  if (!out_bag_fn.empty())
+  {
+    std::cerr << "Opening " << out_bag_fn << " for saving data" << std::endl;
+    out_bag_.reset(new rosbag::Bag);
+    out_bag_->open(out_bag_fn, rosbag::bagmode::Write);
+  }
+
   std::vector<std::string> topics;
   topics.push_back(std::string("tf"));
   topics.push_back(std::string("base_scan"));
@@ -619,7 +629,18 @@ void AmclNode::run(const std::string &in_bag_fn,
     std::cerr << "unsupported message type" << msg.getTopic() << std::endl;
   }
 
+
+  if (out_bag_)
+  {
+    std::cerr << "closing output bag file" << std::endl;
+    // closing output bag might take a while since it needs to store index
+    out_bag_->close();
+  }
+
   bag.close();
+
+  std::cerr << "shutting down" << std::endl;
+  ros::shutdown();
 }
 
 
@@ -1857,7 +1878,12 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
          printf("%6.3f ", p.covariance[6*i+j]);
          puts("");
          }
-       */
+      */
+
+      if (out_bag_)
+      {
+        out_bag_->write("amcl_pose", p.header.stamp, p);
+      }
 
       pose_pub_.publish(p);
       last_published_pose = p;
