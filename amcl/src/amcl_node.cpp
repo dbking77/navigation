@@ -101,25 +101,45 @@ typedef struct
 
 static const std::string scan_topic_ = "scan";
 
-namespace tf2
-{
 
 /**
  * @brief Convert geometry_msgs::PoseStamped into tf2::Transform
+ *
+ * TODO : pull this from somewhere else if it ever implemented
  */
-void fromMsg (const geometry_msgs::TransformStamped &msg, tf2::Transform &out)
+static void fromMsg (const geometry_msgs::TransformStamped &msg, tf2::Transform &out)
 {
   tf2::Quaternion q(msg.transform.rotation.x,
                     msg.transform.rotation.y,
                     msg.transform.rotation.z,
                     msg.transform.rotation.w);
   tf2::Vector3 t(msg.transform.translation.x,
-                  msg.transform.translation.y,
-                  msg.transform.translation.z);
+                 msg.transform.translation.y,
+                 msg.transform.translation.z);
+  out = tf2::Transform(q,t);
+  // TODO use this instead (figure out what header defines it?)
+  //tf2::transformMsgToTF2(msg.transform, out);
+}
+
+
+/**
+ * @brief Convert geometry_msgs::Pose into tf2::Transform
+ *
+ * TODO : pull this from somewhere else if it ever implemented
+ */
+static void fromMsg(const geometry_msgs::Pose &msg, tf2::Transform &out)
+{
+  tf2::Quaternion q(msg.orientation.x,
+                    msg.orientation.y,
+                    msg.orientation.z,
+                    msg.orientation.w);
+  tf2::Vector3 t(msg.position.x,
+                 msg.position.y,
+                 msg.position.z);
   out = tf2::Transform(q,t);
 }
 
-} //end namespace tf2
+
 
 class AmclNode
 {
@@ -158,9 +178,8 @@ class AmclNode
     typedef boost::shared_ptr<LaserInfo> LaserInfoPtr;
 
     tf::TransformBroadcaster* tfb_;
-    tf::TransformListener* tf_;
-
     tf2_ros::Buffer tf_buffer_;
+    tf2_ros::TransformListener* tf_;
 
     // Bag file where output poses can be stored
     boost::shared_ptr<rosbag::Bag> out_bag_;
@@ -188,7 +207,6 @@ class AmclNode
                         nav_msgs::SetMap::Response& res);
 
     void laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan);
-    void bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan);
 
     void initialPoseReceived(const geometry_msgs::PoseWithCovarianceStampedConstPtr& msg);
     void handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStamped& msg);
@@ -198,10 +216,6 @@ class AmclNode
     bool transformOdomToMap(const pf_vector_t &pose,
                             const ros::Time &time,
                             tf::StampedTransform &tf_odom_wrt_map);
-
-    bool bagTransformOdomToMap(const pf_vector_t &pose,
-                               const ros::Time &time,
-                               tf::StampedTransform &tf_odom_wrt_map);
 
     void updateParticleFilter(const pf_vector_t &pose,
                               const sensor_msgs::LaserScanConstPtr& laser_scan,
@@ -244,7 +258,7 @@ class AmclNode
     double resolution;
 
     message_filters::Subscriber<sensor_msgs::LaserScan>* laser_scan_sub_;
-    tf::MessageFilter<sensor_msgs::LaserScan>* laser_scan_filter_;
+    tf2_ros::MessageFilter<sensor_msgs::LaserScan>* laser_scan_filter_;
     ros::Subscriber initial_pose_sub_;
 
     /// Mapping from laser frame ID to laser data
@@ -273,14 +287,9 @@ class AmclNode
 
     void requestMap();
 
-    // Helper to get odometric pose from TF2 transform systemsx
-    bool getBagOdomPose(double& x, double& y, double& yaw,
-                        const ros::Time& time, const std::string& source_frame_id);
-
     // Helper to get odometric pose from transform system
-    bool getOdomPose(tf::Stamped<tf::Pose>& pose,
-                     double& x, double& y, double& yaw,
-                     const ros::Time& t, const std::string& f);
+    bool getOdomPose(double& x, double& y, double& yaw,
+                        const ros::Time& time, const std::string& source_frame_id);
 
     //time for tolerance on the published transform,
     //basically defines how long a map->odom transform is good for
@@ -482,7 +491,7 @@ AmclNode::AmclNode() :
 
   cloud_pub_interval.fromSec(1.0);
   tfb_ = new tf::TransformBroadcaster();
-  tf_ = new tf::TransformListener();
+  tf_ = new tf2_ros::TransformListener(tf_buffer_);
 
   pose_pub_ = nh_.advertise<geometry_msgs::PoseWithCovarianceStamped>("amcl_pose", 2, true);
   particlecloud_pub_ = nh_.advertise<geometry_msgs::PoseArray>("particlecloud", 2, true);
@@ -494,10 +503,12 @@ AmclNode::AmclNode() :
 
   laser_scan_sub_ = new message_filters::Subscriber<sensor_msgs::LaserScan>(nh_, scan_topic_, 100);
   laser_scan_filter_ =
-          new tf::MessageFilter<sensor_msgs::LaserScan>(*laser_scan_sub_,
-                                                        *tf_,
-                                                        odom_frame_id_,
-                                                        100);
+          new tf2_ros::MessageFilter<sensor_msgs::LaserScan>(*laser_scan_sub_,
+                                                            tf_buffer_,
+                                                            odom_frame_id_,
+                                                            100,
+                                                            nh_);
+
   laser_scan_filter_->registerCallback(boost::bind(&AmclNode::laserReceived,
                                                    this, _1));
   initial_pose_sub_ = nh_.subscribe("initialpose", 2, &AmclNode::initialPoseReceived, this);
@@ -586,7 +597,7 @@ void AmclNode::run(const std::string &in_bag_fn,
                       NULL);
 
   std::cerr << "register_callback" << std::endl;
-  laser_scan_filter.registerCallback(boost::bind(&AmclNode::bagLaserReceived, this, _1));
+  laser_scan_filter.registerCallback(boost::bind(&AmclNode::laserReceived, this, _1));
 
   rosbag::View view(bag, rosbag::TopicQuery(topics));
   BOOST_FOREACH(rosbag::MessageInstance const msg, view)
@@ -886,10 +897,11 @@ void AmclNode::reconfigureCB(AMCLConfig &config, uint32_t level)
 
   delete laser_scan_filter_;
   laser_scan_filter_ =
-          new tf::MessageFilter<sensor_msgs::LaserScan>(*laser_scan_sub_,
-                                                        *tf_,
+          new tf2_ros::MessageFilter<sensor_msgs::LaserScan>(*laser_scan_sub_,
+                                                        tf_buffer_,
                                                         odom_frame_id_,
-                                                        100);
+                                                        100,
+                                                        nh_);
   laser_scan_filter_->registerCallback(boost::bind(&AmclNode::laserReceived,
                                                    this, _1));
 
@@ -1162,32 +1174,6 @@ AmclNode::~AmclNode()
   // TODO: delete everything allocated in constructor
 }
 
-bool
-AmclNode::getOdomPose(tf::Stamped<tf::Pose>& odom_pose,
-                      double& x, double& y, double& yaw,
-                      const ros::Time& t, const std::string& f)
-{
-  // Get the robot's pose
-  tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
-                                           tf::Vector3(0,0,0)), t, f);
-  try
-  {
-    this->tf_->transformPose(odom_frame_id_, ident, odom_pose);
-  }
-  catch(tf::TransformException e)
-  {
-    ROS_WARN("Failed to compute odom pose, skipping scan (%s)", e.what());
-    return false;
-  }
-  x = odom_pose.getOrigin().x();
-  y = odom_pose.getOrigin().y();
-  double pitch,roll;
-  odom_pose.getBasis().getEulerYPR(yaw, pitch, roll);
-
-  //ROS_ERROR("%s to odom, %f %f %f", f.c_str(), x, y, yaw);
-
-  return true;
-}
 
 /**
  * @brief Get transform from source frame to odom frame at time
@@ -1196,8 +1182,8 @@ AmclNode::getOdomPose(tf::Stamped<tf::Pose>& odom_pose,
  * @param y reference to variable where y coordinate will be stored
  */
 bool
-AmclNode::getBagOdomPose(double& x, double& y, double& yaw,
-                         const ros::Time& time, const std::string& source_frame_id)
+AmclNode::getOdomPose(double& x, double& y, double& yaw,
+                      const ros::Time& time, const std::string& source_frame_id)
 {
   geometry_msgs::TransformStamped transform;
   try
@@ -1316,13 +1302,13 @@ void printRotation(const char* name, const tf2::Quaternion &q)
 
 
 /**
- * @brief Callback from bag-file based laser processing.  Should use tf2 instead of tf.
+ * @brief Callback for laser processing.
  */
-void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
+void AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
 {
   if ((laser_scan->header.seq % 100) == 0)
   {
-    std::cerr << "bagLaserReceived : " << laser_scan->header.seq << std::endl;
+    std::cerr << "laserReceived : " << laser_scan->header.seq << std::endl;
   }
 
   last_laser_received_ts_ = ros::Time::now();
@@ -1331,28 +1317,23 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
     std::cerr << "No map? : " << std::endl;
     return;
   }
+  boost::recursive_mutex::scoped_lock lr(configuration_mutex_);
 
   // Do we have the base->base_laser Tx yet?
   if(frame_to_laser_.find(laser_scan->header.frame_id) == frame_to_laser_.end())
   {
-    ROS_DEBUG("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan->header.frame_id.c_str());
+    ROS_ERROR("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan->header.frame_id.c_str());
 
+    // To account for lasers that are mounted upside-down, we determine the
+    // min, max, and increment angles of the laser in the base frame.
+    //
+    // Construct min and max angles of laser, in the base_link frame.
     tf2::Transform transform;
     try
     {
       geometry_msgs::TransformStamped geo_msg =
         tf_buffer_.lookupTransform(base_frame_id_, laser_scan->header.frame_id, ros::Time());
-      tf2::fromMsg(geo_msg, transform);
-      /*
-      transform =
-        tf2::Transform(tf2::Quaternion(geo_msg.transform.rotation.x,
-                                       geo_msg.transform.rotation.y,
-                                       geo_msg.transform.rotation.z,
-                                       geo_msg.transform.rotation.w),
-                       tf2::Vector3(geo_msg.transform.translation.x,
-                                    geo_msg.transform.translation.y,
-                                    geo_msg.transform.translation.z));
-      */
+      fromMsg(geo_msg, transform);
     }
     catch(tf2::TransformException& ex)
     {
@@ -1383,8 +1364,8 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
     laser_info->laser = new AMCLLaser(*laser_);
 
     pf_vector_t laser_pose_v;
-    laser_pose_v.v[0] = transform.getOrigin()[0]; //0.235;
-    laser_pose_v.v[1] = transform.getOrigin()[1]; //0.0;
+    laser_pose_v.v[0] = transform.getOrigin()[0];
+    laser_pose_v.v[1] = transform.getOrigin()[1];
     // laser mounting angle is part of angle_min and angle_incremetn -> set to 0 here!
     laser_pose_v.v[2] = 0;
     ROS_ERROR("Received laser's pose wrt robot: %.3f %.3f %.3f",
@@ -1397,8 +1378,8 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
 
   // Where was the robot when this scan was taken?
   pf_vector_t pose;
-  if(!getBagOdomPose(pose.v[0], pose.v[1], pose.v[2],
-                     laser_scan->header.stamp, base_frame_id_))
+  if(!getOdomPose(pose.v[0], pose.v[1], pose.v[2],
+                  laser_scan->header.stamp, base_frame_id_))
   {
     ROS_ERROR("Couldn't determine robot's pose associated with laser scan");
     return;
@@ -1450,144 +1431,11 @@ void printTransform(const char* name,
 }
 
 
-void
-AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
-{
-  last_laser_received_ts_ = ros::Time::now();
-  if( map_ == NULL ) {
-    return;
-  }
-  boost::recursive_mutex::scoped_lock lr(configuration_mutex_);
-
-  // Do we have the base->base_laser Tx yet?
-  if(frame_to_laser_.find(laser_scan->header.frame_id) == frame_to_laser_.end())
-  {
-    ROS_DEBUG("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan->header.frame_id.c_str());
-
-    ROS_ERROR("Laser %s angles in base frame: min: %f inc: %f",
-              laser_scan->header.frame_id.c_str(),
-              laser_scan->angle_min, laser_scan->angle_increment);
-
-    // To account for lasers that are mounted upside-down, we determine the
-    // min, max, and increment angles of the laser in the base frame.
-    //
-    // Construct min and max angles of laser, in the base_link frame.
-    tf::Quaternion q;
-    q.setRPY(0.0, 0.0, laser_scan->angle_min);
-    tf::Stamped<tf::Quaternion> min_q(q, laser_scan->header.stamp,
-                                      laser_scan->header.frame_id);
-    q.setRPY(0.0, 0.0, laser_scan->angle_min + laser_scan->angle_increment);
-    tf::Stamped<tf::Quaternion> inc_q(q, laser_scan->header.stamp,
-                                      laser_scan->header.frame_id);
-
-    printRotation("inc_q", inc_q);
-    printRotation("min_q", min_q);
-
-    tf::Stamped<tf::Pose> ident (tf::Transform(tf::createIdentityQuaternion(),
-                                             tf::Vector3(0,0,0)),
-                                 ros::Time(), laser_scan->header.frame_id);
-    tf::Stamped<tf::Pose> laser_pose;
-    try
-    {
-      tf_->transformPose(base_frame_id_, ident, laser_pose);
-      tf_->transformQuaternion(base_frame_id_, min_q, min_q);
-      tf_->transformQuaternion(base_frame_id_, inc_q, inc_q);
-    }
-    catch(tf::TransformException& e)
-    {
-      ROS_ERROR("Couldn't transform from %s to %s, "
-                "even though the message notifier is in use",
-                laser_scan->header.frame_id.c_str(),
-                base_frame_id_.c_str());
-      return;
-    }
-
-    printRotation("inc_q2", inc_q);
-    printRotation("min_q2", min_q);
-
-    double angle_min = tf::getYaw(min_q);
-    double angle_increment = tf::getYaw(inc_q) - angle_min;
-
-    // wrapping angle to [-pi .. pi]
-    angle_increment = angles::normalize_angle(angle_increment);
-
-    ROS_ERROR("Laser %s angles in base frame: min: %f inc: %f",
-              laser_scan->header.frame_id.c_str(), angle_min, angle_increment);
-
-    LaserInfoPtr laser_info(new LaserInfo);
-    laser_info->angle_min = angle_min;
-    laser_info->angle_increment = angle_increment;
-    laser_info->laser = new AMCLLaser(*laser_);
-
-    pf_vector_t laser_pose_v;
-    laser_pose_v.v[0] = laser_pose.getOrigin().x();
-    laser_pose_v.v[1] = laser_pose.getOrigin().y();
-    // laser mounting angle comes from angle_min and angle_max
-    laser_pose_v.v[2] = 0;
-    laser_info->laser->SetLaserPose(laser_pose_v);
-    ROS_ERROR("Received laser's pose wrt robot: %.3f %.3f %.3f %.3f",
-              laser_pose_v.v[0],
-              laser_pose_v.v[1],
-              angle_min,
-              angle_increment);
-
-    frame_to_laser_[laser_scan->header.frame_id] = laser_info;
-  }
-
-  // Where was the robot when this scan was taken?
-  pf_vector_t pose;
-  if(!getOdomPose(latest_odom_pose_, pose.v[0], pose.v[1], pose.v[2],
-                  laser_scan->header.stamp, base_frame_id_))
-  {
-    ROS_ERROR("Couldn't determine robot's pose associated with laser scan");
-    return;
-  }
-
-  updateParticleFilter(pose, laser_scan, frame_to_laser_[laser_scan->header.frame_id]);
-}
 
 
 tf::Quaternion fastCreateQuaternionFromYaw(double yaw_angle)
 {
   return tf::Quaternion(0,0,sin(yaw_angle/2),cos(yaw_angle/2));
-}
-
-/**
- * @brief Calculate transform of odom frame wrt map frame using particle position
- * @param pose particle filter pose which is represents trasnform from base frame to map frame
- * @param time to lookup transform for
- * @param output where result transform will be stored
- * @returns Returns true if transform can be calculated, false otherwise
- */
-bool AmclNode::transformOdomToMap(const pf_vector_t &pose,
-                                  const ros::Time &time,
-                                  tf::StampedTransform &tf_odom_wrt_map)
-{
-  try
-  {
-    // Lookup transform from odom w.r.t base : T(odom-base)
-    tf::StampedTransform tf_odom_wrt_base;
-    this->tf_->lookupTransform(base_frame_id_, odom_frame_id_, time, tf_odom_wrt_base);
-
-    // Particle pose represents the position of the robot base w.r.t. the map : T(base-map)
-    tf::Transform tf_base_wrt_map(fastCreateQuaternionFromYaw(pose.v[2]),
-                                  tf::Vector3(pose.v[0], pose.v[1], 0.0));
-
-
-    // This is transform of odom w.r.t map : T(odom-map)
-    // T(odom-map) = T(base-map) * T(odom-base)
-    //tf::Transform tmp = tf::StampedTransform(tf_base_wrt_map,time,"","") * tf_odom_wrt_base;
-    tf::Transform tmp = tf_base_wrt_map * tf_odom_wrt_base;
-    tf_odom_wrt_map = tf::StampedTransform(tmp, time, global_frame_id_, odom_frame_id_);
-
-    printTransform("tf_odom_wrt_map", "", "", tf_odom_wrt_map);
-  }
-  catch(tf::TransformException)
-  {
-    ROS_DEBUG("Failed to subtract base to odom transform");
-    return false;
-  }
-  return true;
 }
 
 
@@ -1600,15 +1448,15 @@ bool AmclNode::transformOdomToMap(const pf_vector_t &pose,
  *
  * Uses tf2 buffer, instead of tf::Listener
  */
-bool AmclNode::bagTransformOdomToMap(const pf_vector_t &pose,
-                                     const ros::Time &time,
-                                     tf::StampedTransform &tf_odom_wrt_map)
+bool AmclNode::transformOdomToMap(const pf_vector_t &pose,
+                                 const ros::Time &time,
+                                 tf::StampedTransform &tf_odom_wrt_map)
 {
   try
   {
     // Lookup transform from odom w.r.t base : T(odom-base)
     tf2::Transform tf_odom_wrt_base;
-    tf2::fromMsg(tf_buffer_.lookupTransform(base_frame_id_, odom_frame_id_, time), tf_odom_wrt_base);
+    fromMsg(tf_buffer_.lookupTransform(base_frame_id_, odom_frame_id_, time), tf_odom_wrt_base);
 
     // Particle pose represents the position of the robot base w.r.t. the map : T(base-map)
     tf2::Transform tf_base_wrt_map(tf2::Quaternion(tf2::Vector3(0,0,1),pose.v[2]),
@@ -1894,7 +1742,7 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
       else
       {
         // If tf_ is null, then use tf2 instead
-        if (!bagTransformOdomToMap(hyps[max_weight_hyp].pf_pose_mean,
+        if (!transformOdomToMap(hyps[max_weight_hyp].pf_pose_mean,
                                    laser_scan->header.stamp,
                                    latest_tf_odom_wrt_map_))
         {
@@ -1955,14 +1803,21 @@ AmclNode::initialPoseReceived(const geometry_msgs::PoseWithCovarianceStampedCons
 void
 AmclNode::handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStamped& msg)
 {
+  ROS_ERROR("handleInitialPoseMessage");
+
   boost::recursive_mutex::scoped_lock prl(configuration_mutex_);
   if(msg.header.frame_id == "")
   {
     // This should be removed at some point
     ROS_WARN("Received initial pose with empty frame_id.  You should always supply a frame_id.");
   }
+
   // We only accept initial pose estimates in the global frame, #5148.
-  else if(tf_->resolve(msg.header.frame_id) != tf_->resolve(global_frame_id_))
+  // TODO : support tf_prefix param, or at least warn that it is no longer supported
+  //
+  //  http://docs.ros.org/indigo/api/tf/html/c++/transform__listener_8h_source.html#l00054
+  //
+  else if(msg.header.frame_id != global_frame_id_)
   {
     ROS_WARN("Ignoring initial pose in frame \"%s\"; initial poses must be in the global frame, \"%s\"",
              msg.header.frame_id.c_str(),
@@ -1972,14 +1827,14 @@ AmclNode::handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStampe
 
   // In case the client sent us a pose estimate in the past, integrate the
   // intervening odometric change.
-  tf::StampedTransform tx_odom;
+  tf2::Transform tx_odom;
   try
   {
-    tf_->lookupTransform(base_frame_id_, ros::Time::now(),
-                         base_frame_id_, msg.header.stamp,
-                         global_frame_id_, tx_odom);
+    fromMsg(tf_buffer_.lookupTransform(base_frame_id_, ros::Time::now(),
+                                       base_frame_id_, msg.header.stamp,
+                                       global_frame_id_), tx_odom);
   }
-  catch(tf::TransformException e)
+  catch(tf2::TransformException e)
   {
     // If we've never sent a transform, then this is normal, because the
     // global_frame_id_ frame doesn't exist.  We only care about in-time
@@ -1990,22 +1845,22 @@ AmclNode::handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStampe
     tx_odom.setIdentity();
   }
 
-  tf::Pose pose_old, pose_new;
-  tf::poseMsgToTF(msg.pose.pose, pose_old);
+  tf2::Transform pose_old, pose_new;
+  fromMsg(msg.pose.pose, pose_old);
   pose_new = tx_odom.inverse() * pose_old;
 
   // Transform into the global frame
 
-  ROS_INFO("Setting pose (%.6f): %.3f %.3f %.3f",
+  ROS_ERROR("Setting pose (%.6f): %.3f %.3f %.3f",
            ros::Time::now().toSec(),
            pose_new.getOrigin().x(),
            pose_new.getOrigin().y(),
-           getYaw(pose_new));
+           getYaw(pose_new.getRotation()));
   // Re-initialize the filter
   pf_vector_t pf_init_pose_mean = pf_vector_zero();
   pf_init_pose_mean.v[0] = pose_new.getOrigin().x();
   pf_init_pose_mean.v[1] = pose_new.getOrigin().y();
-  pf_init_pose_mean.v[2] = getYaw(pose_new);
+  pf_init_pose_mean.v[2] = getYaw(pose_new.getRotation());
   pf_matrix_t pf_init_pose_cov = pf_matrix_zero();
   // Copy in the covariance, converting from 6-D to 3-D
   for(int i=0; i<2; i++)
