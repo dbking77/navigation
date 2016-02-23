@@ -9,6 +9,7 @@ find_library(YAML yaml-cpp REQUIRED)
 
 find_package(catkin REQUIRED
         COMPONENTS
+            angles
 	    rosbag
             roscpp
 	    map_server

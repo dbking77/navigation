@@ -38,7 +38,7 @@ beam_skip_error_threshold: 0.9
 odom_model_type: "diff"
 odom_alpha1: 0.5
 odom_alpha2: 0.5
-odom_alpha3: 0.4
+odom_alpha3: 0.5
 odom_alpha4: 0.5
 odom_alpha5: 0.2 # not used
 odom_frame_id: "odom"

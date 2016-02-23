@@ -51,6 +51,9 @@
 #include "nav_msgs/SetMap.h"
 #include "std_srvs/Empty.h"
 
+// External ros stuff
+#include "angles/angles.h"
+
 // For TF2 transform support
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_broadcaster.h"
@@ -95,27 +98,6 @@ typedef struct
   pf_matrix_t pf_pose_cov;
 
 } amcl_hyp_t;
-
-static double
-normalize(double z)
-{
-  return atan2(sin(z),cos(z));
-}
-static double
-angle_diff(double a, double b)
-{
-  double d1, d2;
-  a = normalize(a);
-  b = normalize(b);
-  d1 = a-b;
-  d2 = 2*M_PI - fabs(d1);
-  if(d1 > 0)
-    d2 *= -1.0;
-  if(fabs(d1) < fabs(d2))
-    return(d1);
-  else
-    return(d2);
-}
 
 static const std::string scan_topic_ = "scan";
 
@@ -1390,8 +1372,7 @@ void AmclNode::bagLaserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan
     q_two = transform*q_two;
     angle_min = getYaw(q_min);
     angle_two = getYaw(q_two);
-    // TODO use angles
-    double angle_increment = fmod((angle_two-angle_min) + 5*M_PI, 2*M_PI) - M_PI;
+    double angle_increment = angles::normalize_angle(angle_two-angle_min);
 
     ROS_ERROR("Laser %s angles in base frame: min: %f inc: %f",
               laser_scan->header.frame_id.c_str(), angle_min, angle_increment);
@@ -1528,8 +1509,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     double angle_increment = tf::getYaw(inc_q) - angle_min;
 
     // wrapping angle to [-pi .. pi]
-    // TODO use angles
-    angle_increment = fmod(angle_increment + 5*M_PI, 2*M_PI) - M_PI;
+    angle_increment = angles::normalize_angle(angle_increment);
 
     ROS_ERROR("Laser %s angles in base frame: min: %f inc: %f",
               laser_scan->header.frame_id.c_str(), angle_min, angle_increment);
@@ -1678,7 +1658,7 @@ void AmclNode::updateParticleFilter(const pf_vector_t &pose,
     //delta = pf_vector_coord_sub(pose, pf_odom_pose_);
     delta.v[0] = pose.v[0] - pf_odom_pose_.v[0];
     delta.v[1] = pose.v[1] - pf_odom_pose_.v[1];
-    delta.v[2] = angle_diff(pose.v[2], pf_odom_pose_.v[2]);
+    delta.v[2] = angles::normalize_angle(pose.v[2] - pf_odom_pose_.v[2]);
 
     // See if we should update the filter
     bool update = fabs(delta.v[0]) > d_thresh_ ||
