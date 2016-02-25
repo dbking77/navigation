@@ -156,9 +156,8 @@ void printHdr()
        << endl;
 }
 
-void print(const char* name, const geometry_msgs::TransformStamped &msg)
+void print(const char* name, const geometry_msgs::TransformStamped &msg, char star=' ')
 {
-
   cerr << " " << name
        << std::setprecision(1) << std::fixed
        << "\t"  << msg.header.stamp.toSec()
@@ -167,8 +166,21 @@ void print(const char* name, const geometry_msgs::TransformStamped &msg)
        << "\t" << msg.transform.translation.x
        << "\t" << msg.transform.translation.y
        << "\t" << (getYaw(msg.transform.rotation)*180/M_PI)
+       << "\t" << star
        << endl;
 }
+
+void printM(const char* name, const geometry_msgs::TransformStamped &msg)
+{
+  double e = 0.1;
+  bool match = 
+    (std::abs(msg.transform.translation.x - 1) < e) &&
+    (std::abs(msg.transform.translation.y - 3) < e) &&
+    (std::abs(getYaw(msg.transform.rotation)*180/M_PI - 180) < e);
+  char star = match ? '*':' ';
+  print(name, msg, star);
+}
+
 
 
 /**
@@ -232,62 +244,105 @@ main(int argc, char** argv)
   // 3 - then rotate 90 degrees,        : base-map  2, 3, 190
   // 4 - then forward another 1 meter   : base-map  1, 3, 180
 
-  std::cerr<< "0" << std::endl;
+  std::cerr<< "1" << std::endl;
   tfb.setTransform(tx2d(0, 0, 0, 1, "odom", "base"), "_auth");
   tfb.setTransform(tx2d(-2, -3, -90, 1, "map", "odom"), "_auth");
   print("", tfb.lookupTransform("odom","base", ros::Time()));
   print("", tfb.lookupTransform("map","base", ros::Time()));
 
-  std::cerr<< "1" << std::endl;
+  std::cerr<< "2" << std::endl;
   tfb.setTransform(tx2d(1, 0, 0, 2, "odom", "base"), "_auth");
   tfb.setTransform(tx2d(-2, -3, -90, 2, "map", "odom"), "_auth");
   print("", tfb.lookupTransform("odom","base", ros::Time()));
   print("", tfb.lookupTransform("map","base", ros::Time()));
 
-  std::cerr<< "2" << std::endl;
+  std::cerr<< "3" << std::endl;
   tfb.setTransform(tx2d(3, 0, 0, 3, "odom", "base"), "_auth");
   tfb.setTransform(tx2d(-2, -3, -90, 3, "map", "odom"), "_auth");
   print("", tfb.lookupTransform("odom","base", ros::Time()));
   print("", tfb.lookupTransform("map","base", ros::Time()));
 
-  std::cerr<< "3" << std::endl;
+  std::cerr<< "4" << std::endl;
   tfb.setTransform(tx2d(3, 0, 90, 4, "odom", "base"), "_auth");
   tfb.setTransform(tx2d(-2, -3, -90, 4, "map", "odom"), "_auth");
   print("", tfb.lookupTransform("odom","base", ros::Time()));
   print("", tfb.lookupTransform("map","base", ros::Time()));
 
-  std::cerr<< "4" << std::endl;
+  std::cerr<< "5" << std::endl;
   tfb.setTransform(tx2d(3, 1, 90, 5, "odom", "base"), "_auth");
   tfb.setTransform(tx2d(-2, -3, -90, 5, "map", "odom"), "_auth");
   print("", tfb.lookupTransform("odom","base", ros::Time()));
   print("", tfb.lookupTransform("map","base", ros::Time()));
 
+  for (unsigned init_time=1; init_time<=5; ++init_time)
+  {
+    cerr << "Init time = " << init_time << endl;
+    geometry_msgs::TransformStamped pose_old;
+    if (init_time == 1)
+    {
+      pose_old = tx2d(2, 0, 90, init_time, "map", "base");
+    }
+    else if (init_time == 2)
+    {
+      pose_old = tx2d(2, 1, 90, init_time, "map", "base");
+    }
+    else if (init_time == 3)
+    {
+      pose_old = tx2d(2, 3, 90, init_time, "map", "base");
+    }
+    else if (init_time == 4)
+    {
+      pose_old = tx2d(2, 3, 180, init_time, "map", "base");
+    }
+    else if (init_time == 5)
+    {
+      pose_old = tx2d(1, 3, 180, init_time, "map", "base");
+    }
+    else
+    {
+      cerr << "init_time " << init_time << " not implemented" << endl;
+      return 1;
+    }
 
-  std::cerr<< "Last" << std::endl;
-  geometry_msgs::TransformStamped tf1 =
-    tfb.lookupTransform("odom", ros::Time(5),
-                        "odom", ros::Time(1),
-                        "map");
-  print("wrt map", tf1);
+    print("init", pose_old);
 
-  geometry_msgs::TransformStamped tf2 =
-    tfb.lookupTransform("base", ros::Time(5),
-                        "base", ros::Time(1),
-                        "odom");
-  print("wrt odom", tf2);
+    geometry_msgs::TransformStamped tx_odom;
+    tx_odom = tfb.lookupTransform("odom", ros::Time(),
+                                  "odom", ros::Time(init_time),
+                                  "map");
+    print("map", tx_odom);
+    printM(" pre", tx_odom*pose_old);
+    printM(" post", pose_old*tx_odom);
 
-
-  geometry_msgs::TransformStamped tf3 =
-    tfb.lookupTransform("base", ros::Time(1),
-                        "base", ros::Time(5),
-                        "map");
-  print("wrt map", tf3);
+    
+    tx_odom = tfb.lookupTransform("base", ros::Time(),
+                                  "base", ros::Time(init_time),
+                                  "odom");
+    print("odom", tx_odom);
+    printM(" pre", tx_odom*pose_old);
+    printM(" post", pose_old*tx_odom);
 
 
-  //tfb.setTransform(tx2d(2, 0, 90, 5, "map", "odom"), "_auth");
-  //print("", tfb.lookupTransform("odom","base", ros::Time()));
-  //print("", tfb.lookupTransform("map","odom", ros::Time()));
-  //print("", tfb.lookupTransform("map","base", ros::Time()));
+    tx_odom = tfb.lookupTransform("base", ros::Time(init_time),
+                                  "base", ros::Time(),
+                                  "map");
+    print("map", tx_odom);
+    printM(" pre", tx_odom*pose_old);
+    printM(" post", pose_old*tx_odom);
 
-  // Transforms are translation then rotation
+
+    tx_odom = tfb.lookupTransform("base", ros::Time(),
+                                  "base", ros::Time(init_time),
+                                  "map");
+    {
+      tf2::Transform tf;
+      fromMsg(tx_odom, tf);
+      tf = tf.inverse();
+      toMsg(tf, tx_odom);
+    }
+    print("mapInv", tx_odom);
+    printM(" pre", tx_odom*pose_old);
+    printM(" post", pose_old*tx_odom);
+  }
+
 }
