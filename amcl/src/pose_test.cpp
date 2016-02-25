@@ -4,6 +4,7 @@
 #include "geometry_msgs/TransformStamped.h"
 #include "geometry_msgs/Vector3.h"
 #include "geometry_msgs/Quaternion.h"
+#include "tf2/LinearMath/Transform.h"
 
 using std::cerr;
 using std::endl;
@@ -185,8 +186,6 @@ static void fromMsg (const geometry_msgs::TransformStamped &msg, tf2::Transform 
                  msg.transform.translation.y,
                  msg.transform.translation.z);
   out = tf2::Transform(q,t);
-  // TODO use this instead (figure out what header defines it?)
-  //tf2::transformMsgToTF2(msg.transform, out);
 }
 
 
@@ -197,18 +196,14 @@ static void fromMsg (const geometry_msgs::TransformStamped &msg, tf2::Transform 
  */
 static void toMsg (const tf2::Transform &in, geometry_msgs::TransformStamped &msg)
 {
-  const tf2::Quaternion &q(in.rotation);
-  msg.transform.rotation.x = q.x;
-  msg.transform.rotation.y = q.y;
-  msg.transform.rotation.z = q.z;
-  msg.transform.rotation.w = q.w;
-
-  tf2::Vector3 t(msg.transform.translation.x,
-                 msg.transform.translation.y,
-                 msg.transform.translation.z);
-  out = tf2::Transform(q,t);
-  // TODO use this instead (figure out what header defines it?)
-  //tf2::transformMsgToTF2(msg.transform, out);
+  const tf2::Quaternion q(in.getRotation());
+  msg.transform.rotation.x = q.x();
+  msg.transform.rotation.y = q.y();
+  msg.transform.rotation.z = q.z();
+  msg.transform.rotation.w = q.w();
+  msg.transform.translation.x = in.getOrigin()[0];
+  msg.transform.translation.y = in.getOrigin()[1];
+  msg.transform.translation.z = in.getOrigin()[2];
 }
 
 
@@ -216,7 +211,12 @@ geometry_msgs::TransformStamped
 operator *(const geometry_msgs::TransformStamped &a,
            const geometry_msgs::TransformStamped &b)
 {
-
+  tf2::Transform a2,b2;
+  fromMsg(a,a2);
+  fromMsg(b,b2);
+  geometry_msgs::TransformStamped axb;
+  toMsg(a2*b2, axb);
+  return axb;
 }
 
 int
