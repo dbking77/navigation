@@ -11,6 +11,7 @@ using std::endl;
 geometry_msgs::TransformStamped tx2d(double dx, double dy, double dtheta, double dt,
                                      const std::string &parent, const std::string &child)
 {
+  dtheta *= M_PI/180.0;
   geometry_msgs::TransformStamped tx;
   geometry_msgs::Vector3 &t(tx.transform.translation);
   t.x = dx; t.y = dy; t.z = 0.0;
@@ -24,21 +25,21 @@ geometry_msgs::TransformStamped tx2d(double dx, double dy, double dtheta, double
 }
 
 /*  Moved forward 2 meters
-transforms: 
-  - 
-    header: 
+transforms:
+  -
+    header:
       seq: 0
-      stamp: 
+      stamp:
         secs: 1456360333
         nsecs: 520700923
       frame_id: odom
     child_frame_id: base_link
-    transform: 
-      translation: 
+    transform:
+      translation:
         x: 2.03968531857
         y: 0.00509840534769
         z: 0.0
-      rotation: 
+      rotation:
         x: 0.0
         y: 0.0
         z: 0.0118346724763
@@ -54,21 +55,21 @@ At time 1456360432.660
 
 
 /* Rotate -90 degrees
-transforms: 
-  - 
-    header: 
+transforms:
+  -
+    header:
       seq: 0
-      stamp: 
+      stamp:
         secs: 1456360502
         nsecs: 399830692
       frame_id: odom
     child_frame_id: base_link
-    transform: 
-      translation: 
+    transform:
+      translation:
         x: 2.04224327458
         y: 0.00529340522398
         z: 0.0
-      rotation: 
+      rotation:
         x: 0.0
         y: 0.0
         z: -0.704542542177
@@ -84,21 +85,21 @@ At time 1456360603.500
 
 
 /*  Move another 1 meter forward
-transforms: 
-  - 
-    header: 
+transforms:
+  -
+    header:
       seq: 0
-      stamp: 
+      stamp:
         secs: 1456360715
         nsecs: 899764445
       frame_id: odom
     child_frame_id: base_link
-    transform: 
-      translation: 
+    transform:
+      translation:
         x: 2.0556281702
         y: -1.01476717053
         z: 0.0
-      rotation: 
+      rotation:
         x: 0.0
         y: 0.0
         z: -0.692537181504
@@ -122,26 +123,99 @@ At time 1456360817.360
 */
 
 
+/*
+void Transformer::lookupTransform	(	const std::string &     target_frame,
+const std::string &     source_frame,
+const ros::Time &       time,
+StampedTransform &      transform
+)		const
+Get the transform between two frames by frame ID.
+
+Parameters:
+target_frame	The frame to which data should be transformed
+source_frame	The frame where the data originated
+time	The time at which the value of the transform is desired. (0 will get the latest)
+transform	The transform reference to fill.
+*/
+
+double getYaw(const geometry_msgs::Quaternion &q)
+{
+  return 2.0*atan2(q.z, q.w);
+}
+
+void printHdr()
+{
+  cerr << "Name   "
+       << "\tStamp"
+       << "\tFrame"
+       << "\tChild"
+       << "\tx    "
+       << "\ty    "
+       << "\tangle"
+       << endl;
+}
+
+void print(const char* name, const geometry_msgs::TransformStamped &msg)
+{
+
+  cerr << " " << name
+       << std::setprecision(1) << std::fixed
+       << "\t"  << msg.header.stamp.toSec()
+       << "\t" << msg.header.frame_id
+       << "\t" << msg.child_frame_id
+       << "\t" << msg.transform.translation.x
+       << "\t" << msg.transform.translation.y
+       << "\t" << (getYaw(msg.transform.rotation)*180/M_PI)
+       << endl;
+}
+
 int
 main(int argc, char** argv)
 {
   tf2_ros::Buffer tfb;
 
-  // we move forward 2 meters, then rotate 90 degrees, then forware another 1 meter
-  tfb.setTransform(tx2d(0, 0, 0*M_PI/180, 0, "odom", "base"), "_auth");
-  cerr << endl << "Move 0 " << endl << tfb.lookupTransform("odom","base", ros::Time()) << endl;
+  printHdr();
 
-  tfb.setTransform(tx2d(2, 0, 0*M_PI/180, 1, "odom", "base"), "_auth");
-  cerr << endl << "Move 1 " << endl << tfb.lookupTransform("odom","base", ros::Time()) << endl;
+  // 0 - start                          : base-map  2, 0, 90
+  // 1 - we move forward 1 meters,      : 
+  // 2 - then forward another 2 meters,
+  // 3 - then rotate 90 degrees,
+  // 4 - then forward another 1 meter
 
-  tfb.setTransform(tx2d(2, 0, 90*M_PI/180, 2, "odom", "base"), "_auth");
-  cerr << endl << "Move 2 " << endl << tfb.lookupTransform("odom","base", ros::Time()) << endl;
+  std::cerr<< "0" << std::endl;
+  tfb.setTransform(tx2d(0, 0, 0, 1, "odom", "base"), "_auth");
+  tfb.setTransform(tx2d(2, 0, 90, 1, "map", "odom"), "_auth");
+  print("", tfb.lookupTransform("odom","base", ros::Time()));
+  print("", tfb.lookupTransform("map","odom", ros::Time()));
+  print("", tfb.lookupTransform("map","base", ros::Time()));
 
-  tfb.setTransform(tx2d(2, 1, 90*M_PI/180, 3, "odom", "base"), "_auth");
-  cerr << endl << "Move 3 " << endl << tfb.lookupTransform("odom","base", ros::Time()) << endl;
+  std::cerr<< "1" << std::endl;
+  tfb.setTransform(tx2d(1, 0, 0, 1, "odom", "base"), "_auth");
+  tfb.setTransform(tx2d(2, 0, 90, 1, "map", "odom"), "_auth");
+  print("", tfb.lookupTransform("odom","base", ros::Time()));
+  print("", tfb.lookupTransform("map","odom", ros::Time()));
+  print("", tfb.lookupTransform("map","base", ros::Time()));
 
-  
-  
+  std::cerr<< "2" << std::endl;
+  tfb.setTransform(tx2d(3, 0, 0, 2, "odom", "base"), "_auth");
+  tfb.setTransform(tx2d(2, 0, 90, 2, "map", "odom"), "_auth");
+  print("", tfb.lookupTransform("odom","base", ros::Time()));
+  print("", tfb.lookupTransform("map","odom", ros::Time()));
+  print("", tfb.lookupTransform("map","base", ros::Time()));
+
+  std::cerr<< "3" << std::endl;
+  tfb.setTransform(tx2d(3, 0, 90, 2, "odom", "base"), "_auth");
+  tfb.setTransform(tx2d(2, 0, 90, 2, "map", "odom"), "_auth");
+  print("", tfb.lookupTransform("odom","base", ros::Time()));
+  print("", tfb.lookupTransform("map","odom", ros::Time()));
+  print("", tfb.lookupTransform("map","base", ros::Time()));
+
+  std::cerr<< "4" << std::endl;
+  tfb.setTransform(tx2d(3, 1, 90, 2, "odom", "base"), "_auth");
+  tfb.setTransform(tx2d(2, 0, 90, 2, "map", "odom"), "_auth");
+  print("", tfb.lookupTransform("odom","base", ros::Time()));
+  print("", tfb.lookupTransform("map","odom", ros::Time()));
+  print("", tfb.lookupTransform("map","base", ros::Time()));
 
   // Transforms are translation then rotation
 }
