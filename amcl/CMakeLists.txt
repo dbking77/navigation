@@ -72,6 +72,13 @@ target_link_libraries(amcl
     yaml-cpp
 )
 
+add_executable(pose_test src/pose_test.cpp)
+
+target_link_libraries(pose_test
+    ${Boost_LIBRARIES}
+    ${catkin_LIBRARIES}
+)
+
 install( TARGETS
     amcl amcl_sensors amcl_map amcl_pf
     ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
