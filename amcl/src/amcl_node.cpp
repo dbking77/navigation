@@ -1830,8 +1830,8 @@ AmclNode::handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStampe
   tf2::Transform tx_odom;
   try
   {
-    fromMsg(tf_buffer_.lookupTransform(base_frame_id_, ros::Time::now(),
-                                       base_frame_id_, msg.header.stamp,
+    fromMsg(tf_buffer_.lookupTransform(base_frame_id_, msg.header.stamp,
+                                       base_frame_id_, ros::Time::now(),
                                        global_frame_id_), tx_odom);
   }
   catch(tf2::TransformException e)
@@ -1842,12 +1842,16 @@ AmclNode::handleInitialPoseMessage(const geometry_msgs::PoseWithCovarianceStampe
     // startup condition doesn't really cost us anything.
     if(sent_first_transform_)
       ROS_WARN("Failed to transform initial pose in time (%s)", e.what());
+    else
+      ROS_WARN("2 (%s)", e.what());
+    ROS_ERROR("Failed to transform initial pose in time (%s)", e.what());
     tx_odom.setIdentity();
   }
 
+  ROS_ERROR("v3");
   tf2::Transform pose_old, pose_new;
   fromMsg(msg.pose.pose, pose_old);
-  pose_new = tx_odom.inverse() * pose_old;
+  pose_new = pose_old * tx_odom;
 
   // Transform into the global frame
 

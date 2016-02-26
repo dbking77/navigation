@@ -9,7 +9,7 @@ import rospy
 
 
 def main():
-    rospy.init_node('grab_time.py', anonymous=True)
+    rospy.init_node('grab_time', anonymous=True)
     while not rospy.is_shutdown():
         raw_input('press enter to get time')
         t = rospy.Time.now()
