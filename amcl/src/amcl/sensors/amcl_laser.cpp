@@ -138,6 +138,23 @@ bool AMCLLaser::UpdateSensor(pf_t *pf, AMCLSensorData *data)
 
 
 ////////////////////////////////////////////////////////////////////////////////
+// Apply the laser sensor model, to particle_sample_set instead of pf
+double AMCLLaser::UpdateSensor(pf_sample_set_t* set, AMCLLaserData *data)
+{
+  // Apply the laser sensor model
+  if(this->model_type == LASER_MODEL_BEAM)
+    return BeamModel(data, set);
+  else if(this->model_type == LASER_MODEL_LIKELIHOOD_FIELD)
+    return LikelihoodFieldModel(data, set);
+  else if(this->model_type == LASER_MODEL_LIKELIHOOD_FIELD_PROB)
+    return LikelihoodFieldModelProb(data, set);
+  else
+    return BeamModel(data, set);
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////
 // Determine the probability for the given pose
 double AMCLLaser::BeamModel(AMCLLaserData *data, pf_sample_set_t* set)
 {

@@ -90,6 +90,9 @@ class AMCLLaser : public AMCLSensor
   // filter has been updated.
   public: virtual bool UpdateSensor(pf_t *pf, AMCLSensorData *data);
 
+  // Update particle set weights based on the sensor model. Returns total weight of pariticle set
+  public: double UpdateSensor(pf_sample_set_t* set, AMCLLaserData *data);
+
   // Set the laser's pose after construction
   public: void SetLaserPose(pf_vector_t& laser_pose) 
           {this->laser_pose = laser_pose;}

@@ -3,6 +3,7 @@ project(amcl)
 
 find_package(catkin REQUIRED
         COMPONENTS
+	    actionlib_msgs
             roscpp
             tf
             dynamic_reconfigure
@@ -15,8 +16,18 @@ generate_dynamic_reconfigure_options(
     cfg/AMCL.cfg
 )
 
+add_action_files(
+  DIRECTORY action
+  FILES CheckPoses.action
+)
+
+generate_messages(
+  DEPENDENCIES actionlib_msgs geometry_msgs  # Or other packages containing msgs
+)
+
 catkin_package(
     CATKIN_DEPENDS
+        actionlib_msgs
         roscpp
         dynamic_reconfigure
         tf
@@ -60,11 +71,11 @@ target_link_libraries(amcl
 )
 
 
-add_executable(pose_check
-               src/pose_check.cpp)
-add_dependencies(pose_check amcl_gencfg)
+add_executable(check_poses
+               src/check_poses.cpp)
+add_dependencies(check_poses amcl_gencfg)
 
-target_link_libraries(pose_check
+target_link_libraries(check_poses
     amcl_sensors amcl_map amcl_pf
     ${Boost_LIBRARIES}
     ${catkin_LIBRARIES}
