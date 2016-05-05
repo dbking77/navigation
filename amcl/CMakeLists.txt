@@ -3,7 +3,7 @@ project(amcl)
 
 find_package(catkin REQUIRED
         COMPONENTS
-	    rosbag
+            rosbag
             roscpp
             tf
             dynamic_reconfigure
