@@ -1343,7 +1343,12 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       last_published_pose = p;
 
       // Publish max weight associated with best pose average
-      pose_weight_pub_.publish(max_weight);
+      {
+        ROS_INFO_THROTTLE(2.0, "Pose weight %f", max_weight);
+        std_msgs::Float64 pose_weight;
+        pose_weight.data = max_weight;
+        pose_weight_pub_.publish(pose_weight);
+      }
 
       ROS_DEBUG("New pose: %6.3f %6.3f %6.3f",
                hyps[max_weight_hyp].pf_pose_mean.v[0],
