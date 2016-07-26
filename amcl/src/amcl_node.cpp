@@ -256,6 +256,8 @@ class AmclNode
     bool do_beamskip_;
     double beam_skip_distance_, beam_skip_threshold_, beam_skip_error_threshold_;
     double laser_likelihood_max_dist_;
+    double base_twist_sample_interval_;
+    bool use_base_frame_twist_;
     odom_model_t odom_model_type_;
     double init_pose_[3];
     double init_cov_[3];
@@ -376,6 +378,9 @@ AmclNode::AmclNode() :
              tmp_model_type.c_str());
     laser_model_type_ = LASER_MODEL_LIKELIHOOD_FIELD;
   }
+
+  private_nh_.param("base_twist_sample_interval", base_twist_sample_interval_, 0.1);
+  private_nh_.param("use_base_frame_twist", use_base_frame_twist_, true);
 
   private_nh_.param("odom_model_type", tmp_model_type, std::string("diff"));
   if(tmp_model_type == "diff")
@@ -1220,6 +1225,30 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
       // Compute bearing
       ldata.ranges[i][1] = angle_min +
               (i * angle_increment);
+    }
+
+    ldata.sample_dt = laser_scan->time_increment;
+
+    // Put velocity of base_frame in laser model (if enabled)
+    if (use_base_frame_twist_)
+    {
+      try
+      {
+        double interval = base_twist_sample_interval_;
+        tf::StampedTransform transform;
+        tf_->lookupTransform(base_frame_id_, laser_scan->header.stamp - ros::Duration(interval),
+                             base_frame_id_, laser_scan->header.stamp,
+                             odom_frame_id_,
+                             transform);
+        ldata.twist.v[0] = transform.getOrigin()[0] / interval;
+        ldata.twist.v[1] = transform.getOrigin()[1] / interval;
+        ldata.twist.v[2] = tf::getYaw(transform.getRotation()) / interval;
+      }
+      catch(tf::TransformException& ex)
+      {
+        ROS_WARN_STREAM_THROTTLE(5.0, "Unable to lookup transform to calculate base frame twist"
+                                 << " : " << ex.what());
+      }
     }
 
     lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);

@@ -46,8 +46,19 @@ typedef enum
 class AMCLLaserData : public AMCLSensorData
 {
   public:
-    AMCLLaserData () {ranges=NULL;};
+    AMCLLaserData ()
+    {
+      twist.v[0] = 0.0;
+      twist.v[1] = 0.0;
+      twist.v[2] = 0.0;
+      sample_dt = 0.0;
+      ranges=NULL;
+    };
     virtual ~AMCLLaserData() {delete [] ranges;};
+  // Twist of base frame when laser scan was taken
+  public: pf_vector_t twist;
+  // Time delta between laser scan samples
+  public: double sample_dt;
   // Laser range data (range, bearing tuples)
   public: int range_count;
   public: double range_max;

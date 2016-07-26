@@ -172,6 +172,11 @@ double AMCLLaser::BeamModel(AMCLLaserData *data, pf_sample_set_t* set)
       obs_range = data->ranges[i][0];
       obs_bearing = data->ranges[i][1];
 
+      // Check for NaN
+      if(obs_range != obs_range){
+        continue;
+      }
+
       // Compute the range according to the map
       map_range = map_calc_range(self->map, pose.v[0], pose.v[1],
                                  pose.v[2] + obs_bearing, data->range_max);
@@ -230,10 +235,6 @@ double AMCLLaser::LikelihoodFieldModel(AMCLLaserData *data, pf_sample_set_t* set
   for (j = 0; j < set->sample_count; j++)
   {
     sample = set->samples + j;
-    pose = sample->pose;
-
-    // Take account of the laser pose relative to the robot
-    pose = pf_vector_coord_add(self->laser_pose, pose);
 
     p = 1.0;
 
@@ -251,6 +252,18 @@ double AMCLLaser::LikelihoodFieldModel(AMCLLaserData *data, pf_sample_set_t* set
     {
       obs_range = data->ranges[i][0];
       obs_bearing = data->ranges[i][1];
+
+      // Pose of robot
+      pose = sample->pose;
+
+      // Adjust pose of robot based on robot velocity and laser sample delay
+      double dt = data->sample_dt*i;
+      pose.v[0] += data->twist.v[0] * dt;
+      pose.v[1] += data->twist.v[1] * dt;
+      pose.v[2] += data->twist.v[2] * dt;
+
+      // Take account of the laser pose relative to the robot
+      pose = pf_vector_coord_add(self->laser_pose, pose);
 
       // This model ignores max range readings
       if(obs_range >= data->range_max)
